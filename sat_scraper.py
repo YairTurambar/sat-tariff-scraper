@@ -1,5 +1,5 @@
 """
-SAT Tariff Scraper
+SAT Tariff Scraper - Enhanced Version with CAPTCHA Handling
 Automated script to extract tariff information from Guatemalan SAT portal
 and export to Excel format.
 """
@@ -15,7 +15,6 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import pandas as pd
-from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # Configure logging
@@ -27,21 +26,37 @@ logger = logging.getLogger(__name__)
 
 
 class SATTariffScraper:
-    """Scraper for SAT tariff information"""
+    """Scraper for SAT tariff information with CAPTCHA handling"""
 
-    def __init__(self):
-        """Initialize the scraper with Selenium WebDriver"""
+    def __init__(self, headless=False, manual_captcha=True):
+        """
+        Initialize the scraper with Selenium WebDriver
+        
+        Args:
+            headless: Whether to run browser in headless mode
+            manual_captcha: If True, pauses for manual CAPTCHA entry (recommended)
+        """
         self.base_url = "https://portal.sat.gob.gt/portal/arancel-integrado/"
+        self.consulta_url = "https://portal.sat.gob.gt/portal/consulta.jsf"
         self.driver = None
         self.wait = None
         self.results = []
+        self.headless = headless
+        self.manual_captcha = manual_captcha
 
     def start_browser(self):
         """Start Chrome browser with Selenium"""
         try:
             options = webdriver.ChromeOptions()
+            
+            if self.headless:
+                options.add_argument('--headless')
+            
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option('useAutomationExtension', False)
             
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=options)
@@ -52,10 +67,10 @@ class SATTariffScraper:
             raise
 
     def navigate_to_portal(self):
-        """Navigate to SAT portal and access the tariff consultation page"""
+        """Navigate to SAT portal consultation page"""
         try:
-            logger.info(f"Navigating to {self.base_url}")
-            self.driver.get(self.base_url)
+            logger.info(f"Navigating to SAT portal consultation page...")
+            self.driver.get(self.consulta_url)
             time.sleep(3)
             
             # Wait for page to load
@@ -66,52 +81,93 @@ class SATTariffScraper:
             logger.error(f"Error navigating to portal: {e}")
             raise
 
-    def access_consultation_menu(self):
-        """Access the 'Consultar arancel integrado' option from the menu"""
+    def handle_captcha_manual(self):
+        """
+        Pause and wait for manual CAPTCHA entry by user
+        This is the most reliable method for dealing with CAPTCHA
+        """
         try:
-            logger.info("Looking for consultation menu...")
-            time.sleep(2)
+            logger.warning("\n" + "="*60)
+            logger.warning("⚠️  CAPTCHA DETECTED - Manual intervention required")
+            logger.warning("="*60)
+            logger.warning("Please complete the CAPTCHA in the browser window:")
+            logger.warning("1. A browser window is open with the SAT portal")
+            logger.warning("2. Look for the CAPTCHA field")
+            logger.warning("3. Solve the CAPTCHA and click search")
+            logger.warning("4. The script will automatically continue after solving")
+            logger.warning("="*60 + "\n")
             
-            # Try multiple selectors to find the consultation link
+            # Wait for user to complete CAPTCHA by looking for search results
+            # or for a specific element that appears after CAPTCHA is solved
+            max_wait_time = 120  # 2 minutes to solve CAPTCHA
+            start_time = time.time()
+            
+            while time.time() - start_time < max_wait_time:
+                try:
+                    # Check if results table or data appears
+                    # This indicates CAPTCHA was solved
+                    self.driver.find_element(By.XPATH, "//table//tr[position() > 1]")
+                    logger.info("✅ CAPTCHA solved! Continuing with data extraction...")
+                    time.sleep(2)
+                    return True
+                except:
+                    time.sleep(1)
+                    continue
+            
+            logger.error("❌ CAPTCHA solving timeout - exceeded 2 minutes")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error in manual CAPTCHA handling: {e}")
+            return False
+
+    def find_captcha_field(self):
+        """Locate the CAPTCHA input field"""
+        try:
             selectors = [
-                "//a[contains(text(), 'Consultar arancel integrado')]",
-                "//button[contains(text(), 'Consultar arancel integrado')]",
-                "//a[contains(@href, 'consultar')]",
-                "//span[contains(text(), 'Consultar')]",
+                "//input[@id='frmBuscar:txtKaptcha']",
+                "//input[contains(@id, 'Kaptcha')]",
+                "//input[contains(@id, 'captcha')]",
+                "//input[contains(@name, 'captcha')]",
             ]
             
-            element_found = False
             for selector in selectors:
                 try:
-                    element = self.wait.until(EC.element_to_be_clickable((By.XPATH, selector)))
-                    element.click()
-                    element_found = True
-                    logger.info("Clicked on 'Consultar arancel integrado'")
-                    time.sleep(2)
-                    break
+                    field = self.driver.find_element(By.XPATH, selector)
+                    logger.debug(f"Found CAPTCHA field with selector: {selector}")
+                    return field
                 except:
                     continue
             
-            if not element_found:
-                logger.warning("Could not find consultation menu via standard selectors")
-                # Try to find input field directly
-                self.find_input_field()
-                
+            return None
+            
         except Exception as e:
-            logger.error(f"Error accessing consultation menu: {e}")
-            raise
+            logger.error(f"Error finding CAPTCHA field: {e}")
+            return None
+
+    def check_for_captcha(self):
+        """Check if CAPTCHA is present on the page"""
+        try:
+            captcha_field = self.find_captcha_field()
+            if captcha_field:
+                logger.warning("CAPTCHA detected on page")
+                return True
+            return False
+        except:
+            return False
 
     def find_input_field(self):
         """Locate the HS Code input field"""
         try:
             logger.info("Searching for HS Code input field...")
             
-            # Common input field selectors
             selectors = [
-                "//input[@id='hsCode']",
+                "//input[@id='frmBuscar:txtCodigoArancelario']",
+                "//input[contains(@id, 'txtCodigoArancelario')]",
                 "//input[@placeholder*='HS']",
                 "//input[@name*='hs']",
                 "//input[@placeholder*='arancel']",
+                "//input[@placeholder*='Código']",
                 "//input[contains(@class, 'form-control')]",
             ]
             
@@ -122,7 +178,7 @@ class SATTariffScraper:
                     return field
                 except:
                     continue
-                    
+            
             logger.warning("Could not locate input field with predefined selectors")
             return None
             
@@ -155,11 +211,12 @@ class SATTariffScraper:
             logger.info("Looking for search button...")
             
             selectors = [
+                "//button[contains(@id, 'btnBuscar')]",
                 "//button[contains(text(), 'Consultar')]",
                 "//button[contains(text(), 'Buscar')]",
                 "//button[@type='submit']",
-                "//input[@type='submit']",
-                "//button[contains(@class, 'btn')]",
+                "//input[@type='submit' and contains(@value, 'Consultar')]",
+                "//button[contains(@class, 'btn-primary')]",
             ]
             
             for selector in selectors:
@@ -234,16 +291,16 @@ class SATTariffScraper:
             return {}
 
     def click_derechos_e_impuestos(self) -> bool:
-        """Click on 'Derechos e impuestos' button/link"""
+        """Click on 'Derechos e impuestos' tab/button"""
         try:
-            logger.info("Looking for 'Derechos e impuestos' button...")
+            logger.info("Looking for 'Derechos e impuestos' tab...")
             
             selectors = [
+                "//a[contains(@id, 'Derechos')]",
                 "//button[contains(text(), 'Derechos')]",
                 "//a[contains(text(), 'Derechos')]",
-                "//button[contains(text(), 'impuestos')]",
-                "//a[contains(text(), 'impuestos')]",
-                "//tab[contains(@aria-label, 'Derechos')]",
+                "//span[contains(text(), 'Derechos')]",
+                "//li[@role='tab']//a[contains(text(), 'Derechos')]",
             ]
             
             for selector in selectors:
@@ -256,7 +313,7 @@ class SATTariffScraper:
                 except:
                     continue
             
-            logger.warning("Could not find 'Derechos e impuestos' button")
+            logger.warning("Could not find 'Derechos e impuestos' tab")
             return False
             
         except Exception as e:
@@ -268,6 +325,15 @@ class SATTariffScraper:
         try:
             logger.info(f"Starting scrape for HS Code: {hs_code}")
             
+            # Check for CAPTCHA
+            if self.check_for_captcha():
+                if self.manual_captcha:
+                    if not self.handle_captcha_manual():
+                        return {"HS_Code": hs_code, "Status": "CAPTCHA solving failed"}
+                else:
+                    logger.error("CAPTCHA encountered but manual_captcha is disabled")
+                    return {"HS_Code": hs_code, "Status": "CAPTCHA encountered"}
+            
             # Navigate and enter HS Code
             if not self.enter_hs_code(hs_code):
                 return {"HS_Code": hs_code, "Status": "Failed to enter HS Code"}
@@ -275,6 +341,12 @@ class SATTariffScraper:
             # Click search button
             if not self.click_search_button():
                 return {"HS_Code": hs_code, "Status": "Failed to click search"}
+            
+            # Check for CAPTCHA after search attempt
+            if self.check_for_captcha():
+                if self.manual_captcha:
+                    if not self.handle_captcha_manual():
+                        return {"HS_Code": hs_code, "Status": "CAPTCHA solving failed after search"}
             
             # Try to click Derechos e impuestos
             self.click_derechos_e_impuestos()
@@ -295,7 +367,6 @@ class SATTariffScraper:
         """Scrape multiple HS Codes"""
         try:
             self.navigate_to_portal()
-            self.access_consultation_menu()
             
             for hs_code in hs_codes:
                 data = self.scrape_hs_code(hs_code)
@@ -384,8 +455,10 @@ class SATTariffScraper:
 
 
 if __name__ == "__main__":
-    # Example usage
+    # Example usage with manual CAPTCHA handling
     hs_codes = ["0101210000"]  # Replace with your HS codes
     
-    scraper = SATTariffScraper()
+    # headless=False keeps browser window visible for CAPTCHA solving
+    # manual_captcha=True enables automatic CAPTCHA detection and waiting
+    scraper = SATTariffScraper(headless=False, manual_captcha=True)
     scraper.run(hs_codes)
