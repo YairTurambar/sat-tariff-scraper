@@ -13,6 +13,24 @@ The updated `sat_scraper.py` includes **manual CAPTCHA handling**, which means:
 3. ✅ Script pauses and waits for you to solve it
 4. ✅ Once solved, script automatically continues
 5. ✅ No need to restart or manually enter HS codes again
+6. ✅ You normally solve **one CAPTCHA per run**, not one per HS code
+
+## Why Only One CAPTCHA Per Run
+
+The portal re-arms the CAPTCHA every time a **blank** search form is loaded, but the
+results page keeps the HS code field (`frmBuscar:txtCodigo`) and accepts another
+search without a new CAPTCHA.
+
+The catch is that opening "Derechos e impuestos" in place replaces that results
+page, which used to cost one CAPTCHA per code. The scraper now renders the duties
+view in a **throwaway second tab** (`extract_duties_in_new_tab()`), so the
+validated results page survives and the next code can be searched straight away.
+
+This is not a CAPTCHA bypass - you still solve the challenge yourself. It simply
+avoids needlessly throwing the validated session away.
+
+> If the browser ever gets knocked off the results page, `return_to_search()`
+> reloads the form as a fallback, and that does require a fresh CAPTCHA.
 
 ## Usage
 
@@ -26,7 +44,7 @@ The browser will:
 - Open automatically
 - Navigate to SAT portal
 - Stop when CAPTCHA is detected
-- Wait for you to solve it (up to 2 minutes)
+- Wait for you to solve it (up to 5 minutes)
 - Continue automatically after solving
 
 ### How to Use with CAPTCHA
@@ -89,20 +107,22 @@ scraper.run(["0101210000", "0102210000"])
 
 ## Timing & Limits
 
-- **Wait Time**: 2 minutes (120 seconds) to solve CAPTCHA
+- **Wait Time**: 5 minutes (300 seconds) to solve CAPTCHA
+- **How Often**: Once per run, not once per HS code
 - **Auto-Detection**: Script checks whether the CAPTCHA field is still present every 1 second
 - **Request Delay**: 2 seconds between HS code searches (respects server load)
 
 If you need more time:
-- Edit `max_wait_time = 120` in `handle_captcha_manual()` in `sat_scraper.py` (change 120 to a higher value)
+- Edit `CAPTCHA_TIMEOUT = 300` at the top of `sat_scraper.py`, or
+- Pass it per run: `SATTariffScraper(captcha_timeout=600)`
 
 ## Troubleshooting
 
 ### Issue: "CAPTCHA solving timeout"
 **Solution**: 
-- The script waited 2 minutes but didn't detect solved CAPTCHA
+- The script waited 5 minutes but didn't detect solved CAPTCHA
 - Options:
-  1. Increase timeout in `sat_scraper.py`
+  1. Increase `CAPTCHA_TIMEOUT` in `sat_scraper.py`
   2. Make sure you clicked "Consultar" after solving
   3. Check that the CAPTCHA field is no longer shown on the page
 
@@ -119,9 +139,9 @@ scraper = SATTariffScraper(headless=False, manual_captcha=True)
 3. Update selectors in `sat_scraper.py` line ~127-131
 
 ### Issue: Can't solve CAPTCHA in time
-**Solution**: Increase wait time in `sat_scraper.py`:
+**Solution**: Increase the wait time in `sat_scraper.py`:
 ```python
-max_wait_time = 300  # 5 minutes instead of 2
+CAPTCHA_TIMEOUT = 600  # 10 minutes instead of 5
 ```
 
 ## Advanced: Check for CAPTCHA Manually

@@ -7,7 +7,7 @@ and export to Excel format.
 import re
 import time
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 # Seconds to wait after forcing a full reload of the consultation form.
 PAGE_RELOAD_DELAY = 3
 
+# Seconds allowed to clear the CAPTCHA gate. The portal re-arms it for every blank
+# search form, but the duties view is rendered in a throwaway tab so the validated
+# results page survives - in practice this is hit once per run.
+CAPTCHA_TIMEOUT = 300
+
+# Button label that opens the duties/taxes view. Matched on the label because the
+# JSF id (frmBuscar:_idJsp82) is auto-generated and shifts with the page layout.
+DERECHOS_LABEL = "Derechos e impuestos"
+
+# Seconds to let the duties tab finish loading before reading it.
+DUTIES_TAB_DELAY = 5
+
 
 class SATTariffScraper:
     """Scraper for SAT tariff information with CAPTCHA handling"""
@@ -36,13 +48,14 @@ class SATTariffScraper:
     # Column headers of the duties/taxes grid repeated for every trade agreement.
     DUTY_COLUMNS = ("Código", "Descripción", "Código adicional", "Valor")
 
-    def __init__(self, headless=False, manual_captcha=True):
+    def __init__(self, headless=False, manual_captcha=True, captcha_timeout=CAPTCHA_TIMEOUT):
         """
         Initialize the scraper with Selenium WebDriver
         
         Args:
             headless: Whether to run browser in headless mode
             manual_captcha: If True, pauses for manual CAPTCHA entry (recommended)
+            captcha_timeout: Seconds to wait for the CAPTCHA gate to be cleared
         """
         self.base_url = "https://portal.sat.gob.gt/portal/arancel-integrado/"
         # base_url only hosts the public landing page; the real SAQB'E consultation
@@ -57,6 +70,7 @@ class SATTariffScraper:
         self.results = []
         self.headless = headless
         self.manual_captcha = manual_captcha
+        self.captcha_timeout = captcha_timeout
 
     def start_browser(self):
         """Start Chrome browser with Selenium"""
@@ -69,6 +83,10 @@ class SATTariffScraper:
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-blink-features=AutomationControlled')
+            # The duties view is opened in a second tab so the results page (and
+            # with it the validated session) survives; without this Chrome treats
+            # that as a popup and blocks it.
+            options.add_argument('--disable-popup-blocking')
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option('useAutomationExtension', False)
             
@@ -97,10 +115,13 @@ class SATTariffScraper:
 
     def handle_captcha_manual(self):
         """
-        Pause and wait for manual CAPTCHA entry by user
-        This is the most reliable method for dealing with CAPTCHA
+        Pause and wait for the CAPTCHA gate to be cleared by the user.
+
+        The gate guards the session rather than each query, so this normally
+        needs to happen once per run.
         """
         try:
+            minutes = self.captcha_timeout / 60
             logger.warning("\n" + "="*60)
             logger.warning("⚠️  CAPTCHA DETECTED - Manual intervention required")
             logger.warning("="*60)
@@ -109,14 +130,12 @@ class SATTariffScraper:
             logger.warning("2. Look for the CAPTCHA field")
             logger.warning("3. Solve the CAPTCHA and click search")
             logger.warning("4. The script will automatically continue after solving")
+            logger.warning(f"You have {minutes:.0f} minute(s); this is normally asked once per run.")
             logger.warning("="*60 + "\n")
-            
-            # Wait for user to complete CAPTCHA by looking for search results
-            # or for a specific element that appears after CAPTCHA is solved
-            max_wait_time = 120  # 2 minutes to solve CAPTCHA
+
             start_time = time.time()
-            
-            while time.time() - start_time < max_wait_time:
+
+            while time.time() - start_time < self.captcha_timeout:
                 # The gate is cleared once the CAPTCHA field is gone from the page.
                 # Waiting for a results table instead would miss the common case
                 # where solving the CAPTCHA only reveals the HS Code search form.
@@ -125,10 +144,10 @@ class SATTariffScraper:
                     time.sleep(2)
                     return True
                 time.sleep(1)
-            
-            logger.error("❌ CAPTCHA solving timeout - exceeded 2 minutes")
+
+            logger.error(f"❌ CAPTCHA solving timeout - exceeded {minutes:.0f} minute(s)")
             return False
-            
+
         except Exception as e:
             logger.error(f"Error in manual CAPTCHA handling: {e}")
             return False
@@ -439,7 +458,7 @@ class SATTariffScraper:
             # Match on @value rather than the auto-generated JSF id (_idJsp82),
             # which shifts whenever the page layout changes.
             selectors = [
-                "//input[@type='submit' and @value='Derechos e impuestos']",
+                f"//input[@type='submit' and @value='{DERECHOS_LABEL}']",
                 "//input[@type='submit' and contains(@value, 'Derechos')]",
                 "//a[contains(@id, 'Derechos')]",
                 "//button[contains(text(), 'Derechos')]",
@@ -461,6 +480,89 @@ class SATTariffScraper:
         except Exception as e:
             logger.error(f"Error clicking 'Derechos e impuestos': {e}")
             return False
+
+    # Submits frmBuscar into a named second tab. Clicking the button lets the
+    # page's own handler reset form.target, which replaces the results page;
+    # form.submit() skips onclick handlers and honours the target instead.
+    _DUTIES_IN_TAB_JS = """
+    var f = document.forms['frmBuscar'];
+    if (!f) { return 'no form'; }
+    var btn = null, ins = f.getElementsByTagName('input');
+    for (var i = 0; i < ins.length; i++) {
+        if (ins[i].type === 'submit' && ins[i].value === arguments[0]) { btn = ins[i]; break; }
+    }
+    if (!btn) { return 'no button'; }
+    window.open('about:blank', arguments[1]);
+    f.target = arguments[1];
+    var h = document.createElement('input');
+    h.type = 'hidden';
+    h.name = btn.name;
+    h.value = btn.value;
+    h.id = arguments[2];
+    f.appendChild(h);
+    f.submit();
+    return 'ok';
+    """
+
+    _RESTORE_FORM_JS = """
+    var f = document.forms['frmBuscar'];
+    if (f) {
+        f.target = '';
+        var h = document.getElementById(arguments[0]);
+        if (h) { h.parentNode.removeChild(h); }
+    }
+    """
+
+    def extract_duties_in_new_tab(self) -> Optional[Dict]:
+        """
+        Open 'Derechos e impuestos' in a second tab and extract the duty data there.
+
+        The portal re-arms the CAPTCHA whenever a *blank* search form is loaded,
+        but the results page keeps frmBuscar:txtCodigo and lets you search again
+        without one. Navigating to the duties view in place destroys that page and
+        therefore costs a CAPTCHA per code; rendering it in a throwaway tab leaves
+        the validated session intact, so the run needs a single solve.
+        """
+        driver = self.driver
+        main_handle = driver.current_window_handle
+        before = set(driver.window_handles)
+        tab_name = "satDutiesTab"
+        trigger_id = "__sat_duties_trigger"
+
+        try:
+            logger.info("Opening 'Derechos e impuestos' in a second tab...")
+            result = driver.execute_script(
+                self._DUTIES_IN_TAB_JS, DERECHOS_LABEL, tab_name, trigger_id
+            )
+            if result != "ok":
+                logger.warning(f"Could not submit duties form: {result}")
+                return None
+
+            time.sleep(DUTIES_TAB_DELAY)
+            new_handles = set(driver.window_handles) - before
+            if not new_handles:
+                logger.warning("Duties tab did not open")
+                return None
+
+            driver.switch_to.window(new_handles.pop())
+            time.sleep(2)
+            data = self.extract_tariff_data()
+            driver.close()
+            return data
+
+        except Exception as e:
+            logger.error(f"Error extracting duties in new tab: {e}")
+            return None
+
+        finally:
+            # Always get back to the results tab and undo the temporary submit
+            # wiring, otherwise the next 'Buscar' would submit into the dead tab.
+            try:
+                if main_handle in driver.window_handles:
+                    driver.switch_to.window(main_handle)
+                    driver.execute_script(self._RESTORE_FORM_JS, trigger_id)
+            except Exception as e:
+                logger.error(f"Error restoring search form: {e}")
 
     def scrape_hs_code(self, hs_code: str) -> Dict:
         """Complete scraping process for a single HS Code"""
@@ -490,11 +592,12 @@ class SATTariffScraper:
                     if not self.handle_captcha_manual():
                         return {"HS_Code": hs_code, "Status": "CAPTCHA solving failed after search"}
             
-            # Try to click Derechos e impuestos
-            self.click_derechos_e_impuestos()
-            
-            # Extract data
-            data = self.extract_tariff_data()
+            # The duties view is opened in a second tab so the results page - and
+            # with it the CAPTCHA-validated session - survives for the next code.
+            data = self.extract_duties_in_new_tab()
+            if data is None:
+                return {"HS_Code": hs_code, "Status": "Failed to open duties view"}
+
             data["HS_Code"] = hs_code
             data["Status"] = "Success"
             
@@ -507,28 +610,21 @@ class SATTariffScraper:
 
     def return_to_search(self) -> bool:
         """
-        Go back to the search form so the next HS Code can be queried.
+        Recover the search form when it is no longer on the page.
 
-        The 'Derechos e impuestos' detail view replaces the form, so without this
-        every code after the first one fails to find the input field.
+        Normal runs never need this: the duties view is rendered in a throwaway
+        tab, so the results page - which keeps frmBuscar:txtCodigo and accepts a
+        new search without a CAPTCHA - is still there for the next code. This is
+        only a fallback for when something knocked the browser off that page, and
+        it costs a CAPTCHA because the portal re-arms the gate for a blank form.
         """
         try:
-            selectors = [
-                "//input[@type='submit' and contains(@value, 'Iniciar nueva')]",
-                "//input[@type='submit' and @value='Nomenclatura']",
-                "//a[contains(text(), 'Iniciar nueva')]",
-            ]
-
-            button = self._find_first(selectors, clickable=True)
-            if button is None:
-                logger.warning("Could not find 'Iniciar nueva búsqueda'; reloading form")
-                self.driver.get(self.consulta_url)
-                time.sleep(PAGE_RELOAD_DELAY)
+            if self.driver.find_elements(By.ID, "frmBuscar:txtCodigo"):
                 return True
 
-            button.click()
-            time.sleep(2)
-            logger.info("Returned to search form")
+            logger.warning("Search form lost; reloading it (this needs a new CAPTCHA)")
+            self.driver.get(self.consulta_url)
+            time.sleep(PAGE_RELOAD_DELAY)
             return True
 
         except Exception as e:
