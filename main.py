@@ -29,8 +29,14 @@ def load_hs_codes_from_file(file_path: str) -> list:
             return []
         
         with open(file_path, 'r') as f:
-            codes = [line.strip() for line in f if line.strip()]
-        
+            lines = [line.strip() for line in f if line.strip()]
+
+        # Spreadsheet exports usually keep a header row (e.g. "number"). HS codes
+        # are always digit strings, so treat anything else as a non-code entry.
+        codes = [line for line in lines if line.isdigit()]
+        for skipped in (line for line in lines if not line.isdigit()):
+            logger.warning(f"Skipping non-numeric entry in {file_path}: {skipped!r}")
+
         logger.info(f"Loaded {len(codes)} HS codes from {file_path}")
         return codes
     except Exception as e:
