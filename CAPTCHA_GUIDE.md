@@ -57,7 +57,7 @@ Please complete the CAPTCHA in the browser window:
 - Click the "Consultar" (Search) button
 
 **Step 4: Script Continues Automatically**
-- Once results appear, the script detects this
+- Once the CAPTCHA field disappears from the page, the script detects this
 - Message shows: `✅ CAPTCHA solved! Continuing with data extraction...`
 - Extraction proceeds automatically
 
@@ -90,11 +90,11 @@ scraper.run(["0101210000", "0102210000"])
 ## Timing & Limits
 
 - **Wait Time**: 2 minutes (120 seconds) to solve CAPTCHA
-- **Auto-Detection**: Script checks for results every 1 second
+- **Auto-Detection**: Script checks whether the CAPTCHA field is still present every 1 second
 - **Request Delay**: 2 seconds between HS code searches (respects server load)
 
 If you need more time:
-- Edit `sat_scraper.py` line ~84: `max_wait_time = 120` (change 120 to higher value)
+- Edit `max_wait_time = 120` in `handle_captcha_manual()` in `sat_scraper.py` (change 120 to a higher value)
 
 ## Troubleshooting
 
@@ -104,7 +104,7 @@ If you need more time:
 - Options:
   1. Increase timeout in `sat_scraper.py`
   2. Make sure you clicked "Consultar" after solving
-  3. Check that results table appeared
+  3. Check that the CAPTCHA field is no longer shown on the page
 
 ### Issue: Browser closes after CAPTCHA
 **Solution**: Make sure `headless=False` is set:
