@@ -336,7 +336,7 @@ class SATTariffScraper:
             "HS_Code": result.get("HS_Code", ""),
             "Status": SATTariffScraper._build_section_status(
                 overall_status,
-                section_statuses.get(section_label, overall_status),
+                section_statuses.get(section_label),
             ),
             "Overall_Status": overall_status,
         }
