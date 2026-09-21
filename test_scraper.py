@@ -7,7 +7,7 @@ import unittest
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 
-from sat_scraper import SECTION_LABELS, SATTariffScraper
+from sat_scraper import SECTION_LABELS, SECTION_STATUS_KEY, SATTariffScraper
 
 
 class TestSATTariffScraper(unittest.TestCase):
@@ -68,7 +68,7 @@ class TestSATTariffScraper(unittest.TestCase):
     def test_scrape_hs_code_reflects_non_success_section_status(self):
         expected_data = {
             "Derechos e impuestos": {"duty_rate": "5%"},
-            "Nomenclatura": {"status": "No data found"},
+            "Nomenclatura": {SECTION_STATUS_KEY: "No data found"},
             "Restricciones": {"restriction": "Licencia previa"},
             "Cuotas": {"quota": "Sin cuota"},
         }

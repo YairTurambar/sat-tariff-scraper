@@ -30,6 +30,7 @@ SECTION_LABELS = (
     "Restricciones",
     "Cuotas",
 )
+SECTION_STATUS_KEY = "__section_status__"
 
 
 class SATTariffScraper:
@@ -233,7 +234,7 @@ class SATTariffScraper:
         data.update(self._parse_leaf_key_values(soup))
         if section_label == "Derechos e impuestos":
             data.update(self._parse_duties(soup))
-        return data or {"status": "No data found"}
+        return data or {SECTION_STATUS_KEY: "No data found"}
 
     _SECTION_JS = """
     var form = document.forms['frmBuscar'];
@@ -339,7 +340,7 @@ class SATTariffScraper:
         section_data = {
             key: value
             for key, value in result.get("Sections", {}).get(section_label, {}).items()
-            if key != "status"
+            if key != SECTION_STATUS_KEY
         }
         row.update(section_data)
         return row
@@ -395,7 +396,7 @@ class SATTariffScraper:
                 result["Section_Statuses"][section_label] = "Section extraction failed"
             else:
                 result["Sections"][section_label] = section_data
-                section_status = section_data.get("status")
+                section_status = section_data.get(SECTION_STATUS_KEY)
                 result["Section_Statuses"][section_label] = section_status or "Success"
         result["Status"] = self._build_overall_status(result["Section_Statuses"])
         return result
