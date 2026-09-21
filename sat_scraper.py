@@ -301,7 +301,7 @@ class SATTariffScraper:
 
     @staticmethod
     def _build_section_status(overall_status: str, section_status: str) -> str:
-        if section_status not in {"", None}:
+        if section_status is not None and section_status != "":
             return section_status
         return overall_status
 
