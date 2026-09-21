@@ -303,7 +303,7 @@ class SATTariffScraper:
     def _build_section_status(overall_status: str, section_status: str) -> str:
         if section_status not in {"", None}:
             return section_status
-        return section_status
+        return overall_status
 
     @staticmethod
     def _build_overall_status(section_statuses: Dict[str, str]) -> str:
@@ -370,7 +370,7 @@ class SATTariffScraper:
         result = {
             "HS_Code": hs_code,
             "Sections": {section_label: {} for section_label in SECTION_LABELS},
-            "Section_Statuses": {section_label: "Not attempted" for section_label in SECTION_LABELS},
+            "Section_Statuses": {},
         }
         if self.check_for_captcha():
             if not self.manual_captcha or not self.handle_captcha_manual():

@@ -156,9 +156,7 @@ class TestSATTariffScraper(unittest.TestCase):
                 "Sections": {
                     section_label: {} for section_label in SECTION_LABELS
                 },
-                "Section_Statuses": {
-                    section_label: "Not attempted" for section_label in SECTION_LABELS
-                },
+                "Section_Statuses": {},
             }
         ]
 
@@ -172,7 +170,7 @@ class TestSATTariffScraper(unittest.TestCase):
             for section_label in SECTION_LABELS:
                 sheet = workbook[section_label]
                 self.assertEqual(sheet["A2"].value, "0101210000")
-                self.assertEqual(sheet["B2"].value, "Not attempted")
+                self.assertEqual(sheet["B2"].value, "Failed to submit HS code")
                 self.assertEqual(sheet["C2"].value, "Failed to submit HS code")
         finally:
             if os.path.exists(output_file):
