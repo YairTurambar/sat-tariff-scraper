@@ -301,7 +301,9 @@ class SATTariffScraper:
 
     @staticmethod
     def _build_section_status(overall_status: str, section_status: str) -> str:
-        return section_status if section_status != "Success" else overall_status
+        if section_status in {"", None, "Not attempted", "Success"}:
+            return overall_status
+        return section_status
 
     @staticmethod
     def _build_overall_status(section_statuses: Dict[str, str]) -> str:
@@ -372,21 +374,12 @@ class SATTariffScraper:
         if self.check_for_captcha():
             if not self.manual_captcha or not self.handle_captcha_manual():
                 result["Status"] = "CAPTCHA solving failed"
-                result["Section_Statuses"] = {
-                    section_label: result["Status"] for section_label in SECTION_LABELS
-                }
                 return result
         if not self.enter_hs_code(hs_code) or not self.click_search_button():
             result["Status"] = "Failed to submit HS code"
-            result["Section_Statuses"] = {
-                section_label: result["Status"] for section_label in SECTION_LABELS
-            }
             return result
         if self.check_for_captcha() and (not self.manual_captcha or not self.handle_captcha_manual()):
             result["Status"] = "CAPTCHA solving failed after search"
-            result["Section_Statuses"] = {
-                section_label: result["Status"] for section_label in SECTION_LABELS
-            }
             return result
 
         for section_label in SECTION_LABELS:

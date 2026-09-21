@@ -148,6 +148,35 @@ class TestSATTariffScraper(unittest.TestCase):
             if os.path.exists(output_file):
                 os.remove(output_file)
 
+    def test_export_to_excel_uses_overall_status_for_unattempted_sections(self):
+        self.scraper.results = [
+            {
+                "HS_Code": "0101210000",
+                "Status": "Failed to submit HS code",
+                "Sections": {
+                    section_label: {} for section_label in SECTION_LABELS
+                },
+                "Section_Statuses": {
+                    section_label: "Not attempted" for section_label in SECTION_LABELS
+                },
+            }
+        ]
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as temp_file:
+            output_file = temp_file.name
+
+        try:
+            self.scraper.export_to_excel(output_file)
+            workbook = load_workbook(output_file)
+
+            for section_label in SECTION_LABELS:
+                sheet = workbook[section_label]
+                self.assertEqual(sheet["A2"].value, "0101210000")
+                self.assertEqual(sheet["B2"].value, "Failed to submit HS code")
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+
     def test_empty_table_parse_returns_dict(self):
         self.assertIsInstance(self.scraper._parse_all_tables(BeautifulSoup("<html/>", "html.parser")), dict)
 
