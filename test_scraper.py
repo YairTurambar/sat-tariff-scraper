@@ -65,6 +65,24 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(result["Section_Statuses"]["Cuotas"], "Section extraction failed")
         self.assertEqual(result["Status"], "Missing sections: Cuotas")
 
+    def test_scrape_hs_code_reflects_non_success_section_status(self):
+        expected_data = {
+            "Derechos e impuestos": {"duty_rate": "5%"},
+            "Nomenclatura": {"status": "No data found"},
+            "Restricciones": {"restriction": "Licencia previa"},
+            "Cuotas": {"quota": "Sin cuota"},
+        }
+
+        self.scraper.check_for_captcha = lambda: False
+        self.scraper.enter_hs_code = lambda hs_code: True
+        self.scraper.click_search_button = lambda: True
+        self.scraper.extract_section_in_new_tab = lambda section_label: expected_data[section_label]
+
+        result = self.scraper.scrape_hs_code("0101210000")
+
+        self.assertEqual(result["Section_Statuses"]["Nomenclatura"], "No data found")
+        self.assertEqual(result["Status"], "Section issues: Nomenclatura: No data found")
+
     def test_export_to_excel_creates_section_worksheets(self):
         self.scraper.results = [
             {

@@ -303,6 +303,29 @@ class SATTariffScraper:
         return section_status if section_status != "Success" else overall_status
 
     @staticmethod
+    def _build_overall_status(section_statuses: Dict[str, str]) -> str:
+        failed_sections = [
+            section_label
+            for section_label, status in section_statuses.items()
+            if status == "Section extraction failed"
+        ]
+        section_issues = [
+            f"{section_label}: {status}"
+            for section_label, status in section_statuses.items()
+            if status not in {"Success", "Section extraction failed"}
+        ]
+        if failed_sections and section_issues:
+            return (
+                f"Missing sections: {', '.join(failed_sections)}; "
+                f"Section issues: {'; '.join(section_issues)}"
+            )
+        if failed_sections:
+            return f"Missing sections: {', '.join(failed_sections)}"
+        if section_issues:
+            return f"Section issues: {'; '.join(section_issues)}"
+        return "Success"
+
+    @staticmethod
     def _build_section_row(result: Dict, section_label: str) -> Dict:
         section_statuses = result.get("Section_Statuses", {})
         overall_status = result.get("Status", "")
@@ -365,18 +388,16 @@ class SATTariffScraper:
             }
             return result
 
-        failures = []
         for section_label in SECTION_LABELS:
             logger.info("Extracting %s for HS %s", section_label, hs_code)
             section_data = self.extract_section_in_new_tab(section_label)
             if section_data is None:
-                failures.append(section_label)
                 result["Section_Statuses"][section_label] = "Section extraction failed"
             else:
                 result["Sections"][section_label] = section_data
                 section_status = section_data.get("status")
                 result["Section_Statuses"][section_label] = section_status or "Success"
-        result["Status"] = "Success" if not failures else f"Missing sections: {', '.join(failures)}"
+        result["Status"] = self._build_overall_status(result["Section_Statuses"])
         return result
 
     def scrape_multiple(self, hs_codes: List[str]):
