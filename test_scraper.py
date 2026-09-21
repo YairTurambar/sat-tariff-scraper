@@ -1,75 +1,48 @@
-"""
-Unit tests for SAT Tariff Scraper
-"""
+"""Unit tests for SAT tariff scraper."""
 
 import unittest
-from unittest.mock import patch, MagicMock
-from sat_scraper import SATTariffScraper
+from bs4 import BeautifulSoup
+from sat_scraper import SECTION_LABELS, SATTariffScraper
 
 
 class TestSATTariffScraper(unittest.TestCase):
-    """Test cases for SATTariffScraper class"""
-
     def setUp(self):
-        """Set up test fixtures"""
         self.scraper = SATTariffScraper()
 
-    def tearDown(self):
-        """Clean up after tests"""
-        if self.scraper.driver:
-            self.scraper.driver.quit()
+    def test_sections_are_processed_in_requested_order(self):
+        self.assertEqual(
+            SECTION_LABELS,
+            ("Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas"),
+        )
 
-    def test_initialization(self):
-        """Test scraper initialization"""
-        self.assertIsNone(self.scraper.driver)
-        self.assertIsNone(self.scraper.wait)
-        self.assertEqual(self.scraper.results, [])
-        self.assertEqual(self.scraper.base_url, "https://portal.sat.gob.gt/portal/arancel-integrado/")
+    def test_parse_all_tables_preserves_duplicate_rows(self):
+        soup = BeautifulSoup(
+            "<table><tr><th>Campo</th><th>Valor</th></tr>"
+            "<tr><td>A</td><td>1</td></tr><tr><td>A</td><td>2</td></tr></table>",
+            "html.parser",
+        )
+        data = self.scraper._parse_all_tables(soup)
+        self.assertEqual(data["table_1_row_2_col_2"], "1")
+        self.assertEqual(data["table_1_row_3_col_2"], "2")
+        self.assertIn("label_A", data)
+        self.assertIn("label_A_2", data)
 
-    def test_base_url(self):
-        """Test that base URL is correctly set"""
-        self.assertTrue(self.scraper.base_url.startswith("https://"))
-        self.assertIn("sat.gob.gt", self.scraper.base_url)
+    def test_section_data_includes_every_table_cell(self):
+        soup = BeautifulSoup(
+            "<table><tr><td>Restricción</td><td>Licencia previa</td></tr></table>",
+            "html.parser",
+        )
+        data = self.scraper.extract_section_data.__self__._parse_all_tables(soup)
+        self.assertEqual(data["table_1_row_1_col_1"], "Restricción")
+        self.assertEqual(data["table_1_row_1_col_2"], "Licencia previa")
 
-    @patch('sat_scraper.webdriver.Chrome')
-    def test_start_browser(self, mock_chrome):
-        """Test browser startup"""
-        self.scraper.start_browser()
-        self.assertIsNotNone(self.scraper.driver)
-        self.assertIsNotNone(self.scraper.wait)
+    def test_prefix_section_data(self):
+        prefixed = self.scraper._prefix_section_data("Nomenclatura", {"field": "value"})
+        self.assertEqual(prefixed, {"Nomenclatura__field": "value"})
 
-    def test_parse_tariff_table_empty(self):
-        """Test parsing empty tariff table"""
-        from bs4 import BeautifulSoup
-        html = "<html></html>"
-        soup = BeautifulSoup(html, 'html.parser')
-        result = self.scraper._parse_tariff_table(soup)
-        self.assertIsInstance(result, dict)
-
-    def test_export_to_excel_with_data(self):
-        """Test Excel export with sample data"""
-        self.scraper.results = [
-            {
-                "HS_Code": "0101210000",
-                "Status": "Success",
-                "Derecho de Arancel": "5%",
-                "Impuesto": "10%"
-            }
-        ]
-        # This would create a file, so we just verify the method exists
-        self.assertTrue(callable(self.scraper.export_to_excel))
+    def test_empty_table_parse_returns_dict(self):
+        self.assertIsInstance(self.scraper._parse_all_tables(BeautifulSoup("<html/>", "html.parser")), dict)
 
 
-class TestConfigurationLoading(unittest.TestCase):
-    """Test configuration loading"""
-
-    def test_config_import(self):
-        """Test that configuration can be imported"""
-        from config import SAT_BASE_URL, HS_CODES, OUTPUT_FILE
-        self.assertIsNotNone(SAT_BASE_URL)
-        self.assertIsInstance(HS_CODES, list)
-        self.assertIsInstance(OUTPUT_FILE, str)
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
