@@ -15,6 +15,7 @@ Each worksheet contains:
 
 - `HS_Code`
 - `Status`
+- `Overall_Status`
 - all fields extracted for that SAT section
 
 If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code` and `Status`.

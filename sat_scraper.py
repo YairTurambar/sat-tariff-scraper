@@ -301,8 +301,8 @@ class SATTariffScraper:
 
     @staticmethod
     def _build_section_status(overall_status: str, section_status: str) -> str:
-        if section_status in {"", None, "Not attempted", "Success"}:
-            return overall_status
+        if section_status not in {"", None}:
+            return section_status
         return section_status
 
     @staticmethod
@@ -338,6 +338,7 @@ class SATTariffScraper:
                 overall_status,
                 section_statuses.get(section_label, overall_status),
             ),
+            "Overall_Status": overall_status,
         }
         section_data = {
             key: value
@@ -411,9 +412,11 @@ class SATTariffScraper:
                 rows = [self._build_section_row(result, section_label) for result in self.results]
                 df = pd.DataFrame(rows)
                 if df.empty:
-                    df = pd.DataFrame(columns=["HS_Code", "Status"])
-                ordered_columns = ["HS_Code", "Status"] + [
-                    column for column in df.columns if column not in {"HS_Code", "Status"}
+                    df = pd.DataFrame(columns=["HS_Code", "Status", "Overall_Status"])
+                ordered_columns = ["HS_Code", "Status", "Overall_Status"] + [
+                    column
+                    for column in df.columns
+                    if column not in {"HS_Code", "Status", "Overall_Status"}
                 ]
                 df = df.reindex(columns=ordered_columns)
                 sheet_name = self._safe_sheet_name(section_label)
