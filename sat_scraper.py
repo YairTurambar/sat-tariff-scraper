@@ -293,17 +293,76 @@ class SATTariffScraper:
         prefix = re.sub(r"[^A-Za-z0-9]+", "_", section_label).strip("_")
         return {f"{prefix}__{key}": value for key, value in data.items()}
 
+    @staticmethod
+    def _safe_sheet_name(name: str) -> str:
+        safe_name = re.sub(r"[\[\]:*?/\\]", "_", name).strip()
+        return safe_name[:31] or "Sheet"
+
+    @staticmethod
+    def _build_section_status(overall_status: str, section_status: str) -> str:
+        return section_status if section_status != "Success" else overall_status
+
+    @staticmethod
+    def _build_section_row(result: Dict, section_label: str) -> Dict:
+        section_statuses = result.get("Section_Statuses", {})
+        overall_status = result.get("Status", "")
+        row = {
+            "HS_Code": result.get("HS_Code", ""),
+            "Status": SATTariffScraper._build_section_status(
+                overall_status,
+                section_statuses.get(section_label, overall_status),
+            ),
+        }
+        section_data = {
+            key: value
+            for key, value in result.get("Sections", {}).get(section_label, {}).items()
+            if key != "status"
+        }
+        row.update(section_data)
+        return row
+
+    @staticmethod
+    def _format_worksheet(worksheet):
+        border = Border(*(Side(style="thin"),) * 4)
+        for column in worksheet.columns:
+            letter = column[0].column_letter
+            worksheet.column_dimensions[letter].width = min(
+                max(len(str(cell.value or "")) for cell in column) + 2, 60
+            )
+        for cell in worksheet[1]:
+            cell.fill = PatternFill("solid", fgColor="4472C4")
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.border = border
+        for row in worksheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                cell.border = border
+
     def scrape_hs_code(self, hs_code: str):
-        result = {"HS_Code": hs_code}
+        result = {
+            "HS_Code": hs_code,
+            "Sections": {section_label: {} for section_label in SECTION_LABELS},
+            "Section_Statuses": {section_label: "Not attempted" for section_label in SECTION_LABELS},
+        }
         if self.check_for_captcha():
             if not self.manual_captcha or not self.handle_captcha_manual():
                 result["Status"] = "CAPTCHA solving failed"
+                result["Section_Statuses"] = {
+                    section_label: result["Status"] for section_label in SECTION_LABELS
+                }
                 return result
         if not self.enter_hs_code(hs_code) or not self.click_search_button():
             result["Status"] = "Failed to submit HS code"
+            result["Section_Statuses"] = {
+                section_label: result["Status"] for section_label in SECTION_LABELS
+            }
             return result
         if self.check_for_captcha() and (not self.manual_captcha or not self.handle_captcha_manual()):
             result["Status"] = "CAPTCHA solving failed after search"
+            result["Section_Statuses"] = {
+                section_label: result["Status"] for section_label in SECTION_LABELS
+            }
             return result
 
         failures = []
@@ -312,8 +371,11 @@ class SATTariffScraper:
             section_data = self.extract_section_in_new_tab(section_label)
             if section_data is None:
                 failures.append(section_label)
+                result["Section_Statuses"][section_label] = "Section extraction failed"
             else:
-                result.update(self._prefix_section_data(section_label, section_data))
+                result["Sections"][section_label] = section_data
+                section_status = section_data.get("status")
+                result["Section_Statuses"][section_label] = section_status or "Success"
         result["Status"] = "Success" if not failures else f"Missing sections: {', '.join(failures)}"
         return result
 
@@ -329,25 +391,19 @@ class SATTariffScraper:
         logger.info("Completed scraping %d HS codes", len(self.results))
 
     def export_to_excel(self, output_file="sat_tariff_data.xlsx"):
-        df = pd.DataFrame(self.results)
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="Tariff Data", index=False)
-            worksheet = writer.sheets["Tariff Data"]
-            border = Border(*(Side(style="thin"),) * 4)
-            for column in worksheet.columns:
-                letter = column[0].column_letter
-                worksheet.column_dimensions[letter].width = min(
-                    max(len(str(cell.value or "")) for cell in column) + 2, 60
-                )
-            for cell in worksheet[1]:
-                cell.fill = PatternFill("solid", fgColor="4472C4")
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.alignment = Alignment(horizontal="center", wrap_text=True)
-                cell.border = border
-            for row in worksheet.iter_rows(min_row=2):
-                for cell in row:
-                    cell.alignment = Alignment(vertical="top", wrap_text=True)
-                    cell.border = border
+            for section_label in SECTION_LABELS:
+                rows = [self._build_section_row(result, section_label) for result in self.results]
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    df = pd.DataFrame(columns=["HS_Code", "Status"])
+                ordered_columns = ["HS_Code", "Status"] + [
+                    column for column in df.columns if column not in {"HS_Code", "Status"}
+                ]
+                df = df.reindex(columns=ordered_columns)
+                sheet_name = self._safe_sheet_name(section_label)
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                self._format_worksheet(writer.sheets[sheet_name])
 
     def close_browser(self):
         if self.driver:
