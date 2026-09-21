@@ -30,6 +30,7 @@ SECTION_LABELS = (
     "Restricciones",
     "Cuotas",
 )
+SECTION_STATUS_KEY = "__section_status__"
 
 
 class SATTariffScraper:
@@ -233,7 +234,7 @@ class SATTariffScraper:
         data.update(self._parse_leaf_key_values(soup))
         if section_label == "Derechos e impuestos":
             data.update(self._parse_duties(soup))
-        return data or {"status": "No data found"}
+        return data or {SECTION_STATUS_KEY: "No data found"}
 
     _SECTION_JS = """
     var form = document.forms['frmBuscar'];
@@ -293,8 +294,84 @@ class SATTariffScraper:
         prefix = re.sub(r"[^A-Za-z0-9]+", "_", section_label).strip("_")
         return {f"{prefix}__{key}": value for key, value in data.items()}
 
+    @staticmethod
+    def _safe_sheet_name(name: str) -> str:
+        safe_name = re.sub(r"[\[\]:*?/\\]", "_", name).strip()
+        return safe_name[:31] or "Sheet"
+
+    @staticmethod
+    def _build_section_status(overall_status: str, section_status: str) -> str:
+        if section_status is not None and section_status != "":
+            return section_status
+        return overall_status
+
+    @staticmethod
+    def _build_overall_status(section_statuses: Dict[str, str]) -> str:
+        failed_sections = [
+            section_label
+            for section_label, status in section_statuses.items()
+            if status == "Section extraction failed"
+        ]
+        section_issues = [
+            f"{section_label}: {status}"
+            for section_label, status in section_statuses.items()
+            if status not in {"Success", "Section extraction failed"}
+        ]
+        if failed_sections and section_issues:
+            return (
+                f"Missing sections: {', '.join(failed_sections)}; "
+                f"Section issues: {'; '.join(section_issues)}"
+            )
+        if failed_sections:
+            return f"Missing sections: {', '.join(failed_sections)}"
+        if section_issues:
+            return f"Section issues: {'; '.join(section_issues)}"
+        return "Success"
+
+    @staticmethod
+    def _build_section_row(result: Dict, section_label: str) -> Dict:
+        section_statuses = result.get("Section_Statuses", {})
+        overall_status = result.get("Status", "")
+        row = {
+            "HS_Code": result.get("HS_Code", ""),
+            "Status": SATTariffScraper._build_section_status(
+                overall_status,
+                section_statuses.get(section_label),
+            ),
+            "Overall_Status": overall_status,
+        }
+        section_data = {
+            key: value
+            for key, value in result.get("Sections", {}).get(section_label, {}).items()
+            if key != SECTION_STATUS_KEY
+        }
+        row.update(section_data)
+        return row
+
+    @staticmethod
+    def _format_worksheet(worksheet):
+        border = Border(*(Side(style="thin"),) * 4)
+        for column in worksheet.columns:
+            letter = column[0].column_letter
+            worksheet.column_dimensions[letter].width = min(
+                max(len(str(cell.value or "")) for cell in column) + 2, 60
+            )
+        for cell in worksheet[1]:
+            cell.fill = PatternFill("solid", fgColor="4472C4")
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.border = border
+        for row in worksheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                cell.border = border
+
     def scrape_hs_code(self, hs_code: str):
-        result = {"HS_Code": hs_code}
+        result = {
+            "HS_Code": hs_code,
+            "Sections": {section_label: {} for section_label in SECTION_LABELS},
+            "Section_Statuses": {},
+        }
         if self.check_for_captcha():
             if not self.manual_captcha or not self.handle_captcha_manual():
                 result["Status"] = "CAPTCHA solving failed"
@@ -306,15 +383,16 @@ class SATTariffScraper:
             result["Status"] = "CAPTCHA solving failed after search"
             return result
 
-        failures = []
         for section_label in SECTION_LABELS:
             logger.info("Extracting %s for HS %s", section_label, hs_code)
             section_data = self.extract_section_in_new_tab(section_label)
             if section_data is None:
-                failures.append(section_label)
+                result["Section_Statuses"][section_label] = "Section extraction failed"
             else:
-                result.update(self._prefix_section_data(section_label, section_data))
-        result["Status"] = "Success" if not failures else f"Missing sections: {', '.join(failures)}"
+                result["Sections"][section_label] = section_data
+                section_status = section_data.get(SECTION_STATUS_KEY)
+                result["Section_Statuses"][section_label] = section_status or "Success"
+        result["Status"] = self._build_overall_status(result["Section_Statuses"])
         return result
 
     def scrape_multiple(self, hs_codes: List[str]):
@@ -329,25 +407,21 @@ class SATTariffScraper:
         logger.info("Completed scraping %d HS codes", len(self.results))
 
     def export_to_excel(self, output_file="sat_tariff_data.xlsx"):
-        df = pd.DataFrame(self.results)
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name="Tariff Data", index=False)
-            worksheet = writer.sheets["Tariff Data"]
-            border = Border(*(Side(style="thin"),) * 4)
-            for column in worksheet.columns:
-                letter = column[0].column_letter
-                worksheet.column_dimensions[letter].width = min(
-                    max(len(str(cell.value or "")) for cell in column) + 2, 60
-                )
-            for cell in worksheet[1]:
-                cell.fill = PatternFill("solid", fgColor="4472C4")
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.alignment = Alignment(horizontal="center", wrap_text=True)
-                cell.border = border
-            for row in worksheet.iter_rows(min_row=2):
-                for cell in row:
-                    cell.alignment = Alignment(vertical="top", wrap_text=True)
-                    cell.border = border
+            for section_label in SECTION_LABELS:
+                rows = [self._build_section_row(result, section_label) for result in self.results]
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    df = pd.DataFrame(columns=["HS_Code", "Status", "Overall_Status"])
+                ordered_columns = ["HS_Code", "Status", "Overall_Status"] + [
+                    column
+                    for column in df.columns
+                    if column not in {"HS_Code", "Status", "Overall_Status"}
+                ]
+                df = df.reindex(columns=ordered_columns)
+                sheet_name = self._safe_sheet_name(section_label)
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                self._format_worksheet(writer.sheets[sheet_name])
 
     def close_browser(self):
         if self.driver:

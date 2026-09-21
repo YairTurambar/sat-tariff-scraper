@@ -50,6 +50,9 @@ python main.py
 python main.py hs_codes.txt output_results.xlsx
 ```
 
+The generated workbook includes separate worksheets for `Derechos e impuestos`,
+`Nomenclatura`, `Restricciones`, and `Cuotas`.
+
 ## Project Structure
 
 ```
@@ -95,11 +98,8 @@ HS_CODES = ["0101210000"]
 ## Running Tests
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-cov
-
 # Run tests
-python -m pytest test_scraper.py -v
+python -m unittest -v
 ```
 
 ## Troubleshooting

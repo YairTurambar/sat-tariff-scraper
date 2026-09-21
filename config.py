@@ -19,7 +19,6 @@ REQUEST_DELAY = 2
 
 # Excel Configuration
 OUTPUT_FILE = "sat_tariff_data.xlsx"
-SHEET_NAME = "Tariff Data"
 
 # Header formatting
 HEADER_COLOR = "4472C4"
