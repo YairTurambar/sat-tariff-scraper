@@ -3,10 +3,12 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 
+from main import build_argument_parser, load_hs_codes_from_file
 from sat_scraper import (
     SECTION_LABELS,
     SECTION_ROWS_KEY,
@@ -18,6 +20,58 @@ from sat_scraper import (
 class TestSATTariffScraper(unittest.TestCase):
     def setUp(self):
         self.scraper = SATTariffScraper()
+
+    @staticmethod
+    def _result_for(hs_code, status):
+        return {
+            "HS_Code": hs_code,
+            "Status": status,
+            "Sections": {section_label: {} for section_label in SECTION_LABELS},
+            "Section_Statuses": (
+                {section_label: "Success" for section_label in SECTION_LABELS}
+                if status == "Success"
+                else {}
+            ),
+        }
+
+    def test_load_hs_codes_from_file_supports_arbitrary_counts_without_cap(self):
+        for count in (0, 1, 19, 20, 25):
+            with self.subTest(count=count):
+                codes = [f"{1000000000 + index:010d}" for index in range(count)]
+                with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as temp_file:
+                    temp_file.write("number\n")
+                    temp_file.write("\n".join(codes))
+                    input_path = temp_file.name
+
+                try:
+                    self.assertEqual(load_hs_codes_from_file(input_path), codes)
+                finally:
+                    os.remove(input_path)
+
+    def test_argument_parser_accepts_resume_delay_and_retry_options(self):
+        args = build_argument_parser().parse_args(
+            [
+                "hs_codes.txt",
+                "output.xlsx",
+                "--resume",
+                "--state-file",
+                "state.json",
+                "--delay-between-codes",
+                "1.5",
+                "--max-retries",
+                "3",
+                "--retry-backoff",
+                "4",
+            ]
+        )
+
+        self.assertEqual(args.hs_codes_file, "hs_codes.txt")
+        self.assertEqual(args.output_file, "output.xlsx")
+        self.assertTrue(args.resume)
+        self.assertEqual(args.state_file, "state.json")
+        self.assertEqual(args.delay_between_codes, 1.5)
+        self.assertEqual(args.max_retries, 3)
+        self.assertEqual(args.retry_backoff, 4)
 
     def test_sections_are_processed_in_requested_order(self):
         self.assertEqual(
@@ -199,6 +253,60 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(result["Section_Statuses"]["Nomenclatura"], "No data found")
         self.assertEqual(result["Status"], "Section issues: Nomenclatura: No data found")
 
+    def test_scrape_multiple_continues_after_failed_code_with_bounded_retries(self):
+        scraper = SATTariffScraper(delay_between_codes=0, max_retries=2, retry_backoff=0)
+        scraper.navigate_to_portal = lambda: None
+        scraper.export_to_excel = lambda output_file: None
+        attempts = []
+        outcomes = {
+            "0101210000": [
+                self._result_for("0101210000", "Failed to submit HS code"),
+                self._result_for("0101210000", "Failed to submit HS code"),
+                self._result_for("0101210000", "Failed to submit HS code"),
+            ],
+            "0102210000": [self._result_for("0102210000", "Success")],
+        }
+
+        def fake_scrape_hs_code(hs_code):
+            attempts.append(hs_code)
+            return outcomes[hs_code].pop(0)
+
+        scraper.scrape_hs_code = fake_scrape_hs_code
+
+        scraper.scrape_multiple(
+            ["0101210000", "0102210000"],
+            output_file="/tmp/test-output.xlsx",
+        )
+
+        self.assertEqual(
+            attempts,
+            ["0101210000", "0101210000", "0101210000", "0102210000"],
+        )
+        self.assertEqual([result["HS_Code"] for result in scraper.results], ["0101210000", "0102210000"])
+        self.assertEqual(scraper.results[0]["Status"], "Failed to submit HS code")
+        self.assertEqual(scraper.results[1]["Status"], "Success")
+
+    def test_scrape_multiple_does_not_retry_captcha_failures(self):
+        scraper = SATTariffScraper(delay_between_codes=0, max_retries=3, retry_backoff=0)
+        scraper.navigate_to_portal = lambda: None
+        scraper.export_to_excel = lambda output_file: None
+        attempts = []
+
+        def fake_scrape_hs_code(hs_code):
+            attempts.append(hs_code)
+            return self._result_for(hs_code, "CAPTCHA solving failed")
+
+        scraper.scrape_hs_code = fake_scrape_hs_code
+
+        scraper.scrape_multiple(
+            ["0101210000", "0102210000"],
+            output_file="/tmp/test-output.xlsx",
+        )
+
+        self.assertEqual(attempts, ["0101210000"])
+        self.assertEqual(len(scraper.results), 1)
+        self.assertEqual(scraper.results[0]["Status"], "CAPTCHA solving failed")
+
     def test_export_to_excel_creates_section_worksheets_with_status_columns(self):
         self.scraper.results = [
             {
@@ -320,6 +428,84 @@ class TestSATTariffScraper(unittest.TestCase):
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)
+
+    def test_run_resume_skips_successful_codes_retries_failed_codes_and_preserves_order(self):
+        successful = self._result_for("0101210000", "Success")
+        failed = self._result_for("0102210000", "Failed to submit HS code")
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
+            output_file = output_handle.name
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_handle:
+            state_file = state_handle.name
+
+        try:
+            seed_scraper = SATTariffScraper()
+            seed_scraper.input_order = ["0101210000", "0102210000", "0103210000"]
+            seed_scraper.results = [successful, failed]
+            seed_scraper.save_state(state_file, output_file)
+
+            scraper = SATTariffScraper(delay_between_codes=0, max_retries=0, retry_backoff=0)
+            scraper.start_browser = lambda: None
+            scraper.close_browser = lambda: None
+            scraper.navigate_to_portal = lambda: None
+            attempted_codes = []
+
+            def fake_scrape_hs_code(hs_code):
+                attempted_codes.append(hs_code)
+                return self._result_for(hs_code, "Success")
+
+            scraper.scrape_hs_code = fake_scrape_hs_code
+
+            scraper.run(
+                ["0101210000", "0102210000", "0103210000"],
+                output_file=output_file,
+                resume=True,
+                state_file=state_file,
+            )
+
+            self.assertEqual(attempted_codes, ["0102210000", "0103210000"])
+            self.assertEqual(
+                [result["HS_Code"] for result in scraper.results],
+                ["0101210000", "0102210000", "0103210000"],
+            )
+            self.assertEqual(
+                [result["Status"] for result in scraper.results],
+                ["Success", "Success", "Success"],
+            )
+
+            workbook = load_workbook(output_file)
+            self.assertEqual(workbook.sheetnames, list(SECTION_LABELS))
+            for section_label in SECTION_LABELS:
+                sheet = workbook[section_label]
+                self.assertEqual(
+                    [sheet[f"A{row}"].value for row in range(2, 5)],
+                    ["0101210000", "0102210000", "0103210000"],
+                )
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
+    def test_run_with_no_codes_creates_empty_four_sheet_workbook(self):
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
+            output_file = output_handle.name
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_handle:
+            state_file = state_handle.name
+
+        try:
+            scraper = SATTariffScraper()
+            scraper.start_browser = mock.Mock()
+            scraper.run([], output_file=output_file, state_file=state_file)
+
+            scraper.start_browser.assert_not_called()
+            workbook = load_workbook(output_file)
+            self.assertEqual(workbook.sheetnames, list(SECTION_LABELS))
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
 
 
 if __name__ == "__main__":

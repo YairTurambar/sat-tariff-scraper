@@ -50,8 +50,16 @@ python main.py
 python main.py hs_codes.txt output_results.xlsx
 ```
 
+**Option C - Resume a previous run:**
+```bash
+python main.py hs_codes.txt output_results.xlsx --resume
+```
+
 The generated workbook includes separate worksheets for `Derechos e impuestos`,
 `Nomenclatura`, `Restricciones`, and `Cuotas`.
+
+The scraper processes every valid numeric HS code in `hs_codes.txt` in order. Files
+with fewer than 20 codes, exactly 20 codes, or more than 20 codes are all supported.
 
 ## Project Structure
 
@@ -87,6 +95,8 @@ CHROME_OPTIONS = {
 WAIT_TIMEOUT = 15
 PAGE_LOAD_DELAY = 3
 REQUEST_DELAY = 2
+MAX_RETRIES = 0
+RETRY_BACKOFF = 2
 
 # Output file
 OUTPUT_FILE = "sat_tariff_data.xlsx"
@@ -94,6 +104,27 @@ OUTPUT_FILE = "sat_tariff_data.xlsx"
 # HS Codes to scrape
 HS_CODES = ["0101210000"]
 ```
+
+### CLI options for long-running batches
+
+```bash
+python main.py hs_codes.txt output_results.xlsx \
+  --resume \
+  --state-file custom.state.json \
+  --delay-between-codes 3 \
+  --max-retries 2 \
+  --retry-backoff 5
+```
+
+- `--resume`: reuse the saved JSON state file and skip only HS codes whose previous overall status was `Success`
+- `--state-file`: custom path for the resume/checkpoint JSON file; default is `<output workbook>.state.json`
+- `--delay-between-codes`: pause between HS codes; default is `2`
+- `--max-retries`: retry limit for transient per-code failures; default is `0`
+- `--retry-backoff`: exponential backoff base for retries in seconds; default is `2`
+
+When resuming, failed or incomplete HS codes are retried, completed codes are skipped,
+and the output workbook is regenerated with the same four worksheets and without
+duplicate HS-code rows. Manual CAPTCHA handling is unchanged.
 
 ## Running Tests
 
@@ -115,6 +146,7 @@ pip install --upgrade webdriver-manager
 ```python
 WAIT_TIMEOUT = 30  # Increase from 15
 REQUEST_DELAY = 5  # Increase from 2
+RETRY_BACKOFF = 10  # Increase retry wait time
 ```
 
 ### Issue: Portal page structure different
