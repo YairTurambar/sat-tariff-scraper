@@ -1,8 +1,10 @@
 """SAT tariff scraper with manual CAPTCHA handling and section extraction."""
 
+import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -16,12 +18,21 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
+from config import (
+    MAX_RETRIES,
+    PAGE_LOAD_DELAY,
+    REQUEST_DELAY,
+    RETRY_BACKOFF,
+    SAT_BASE_URL,
+    WAIT_TIMEOUT,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-PAGE_RELOAD_DELAY = 3
+PAGE_RELOAD_DELAY = PAGE_LOAD_DELAY
 CAPTCHA_TIMEOUT = 300
-SECTION_DELAY = 2
+SECTION_DELAY = REQUEST_DELAY
 DUTIES_TAB_DELAY = 5
 
 SECTION_LABELS = (
@@ -30,6 +41,7 @@ SECTION_LABELS = (
     "Restricciones",
     "Cuotas",
 )
+INPUT_INDEX_KEY = "Input_Index"
 SECTION_STATUS_KEY = "__section_status__"
 SECTION_ROWS_KEY = "__section_rows__"
 
@@ -53,8 +65,16 @@ class SATTariffScraper:
         "Criterios de Clasificación",
     )
 
-    def __init__(self, headless=False, manual_captcha=True, captcha_timeout=CAPTCHA_TIMEOUT):
-        self.base_url = "https://portal.sat.gob.gt/portal/arancel-integrado/"
+    def __init__(
+        self,
+        headless=False,
+        manual_captcha=True,
+        captcha_timeout=CAPTCHA_TIMEOUT,
+        delay_between_codes=REQUEST_DELAY,
+        max_retries=MAX_RETRIES,
+        retry_backoff=RETRY_BACKOFF,
+    ):
+        self.base_url = SAT_BASE_URL
         self.consulta_url = (
             "https://farm2.sat.gob.gt/saqbe-arancel-publico"
             "/aduana/arancel/consulta/consulta.jsf"
@@ -62,9 +82,13 @@ class SATTariffScraper:
         self.driver = None
         self.wait = None
         self.results: List[Dict] = []
+        self.input_order: List[str] = []
         self.headless = headless
         self.manual_captcha = manual_captcha
         self.captcha_timeout = captcha_timeout
+        self.delay_between_codes = max(0, delay_between_codes)
+        self.max_retries = max(0, max_retries)
+        self.retry_backoff = max(0, retry_backoff)
 
     def start_browser(self):
         options = webdriver.ChromeOptions()
@@ -78,7 +102,7 @@ class SATTariffScraper:
         options.add_experimental_option("useAutomationExtension", False)
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=options)
-        self.wait = WebDriverWait(self.driver, 15)
+        self.wait = WebDriverWait(self.driver, WAIT_TIMEOUT)
         logger.info("Browser started successfully")
 
     def navigate_to_portal(self):
@@ -599,8 +623,9 @@ class SATTariffScraper:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
                 cell.border = border
 
-    def scrape_hs_code(self, hs_code: str):
+    def scrape_hs_code(self, hs_code: str, input_index: Optional[int] = None):
         result = {
+            INPUT_INDEX_KEY: input_index,
             "HS_Code": hs_code,
             "Sections": {section_label: {} for section_label in SECTION_LABELS},
             "Section_Statuses": {},
@@ -628,15 +653,148 @@ class SATTariffScraper:
         result["Status"] = self._build_overall_status(result["Section_Statuses"])
         return result
 
-    def scrape_multiple(self, hs_codes: List[str]):
+    @staticmethod
+    def _is_successful_result(result: Dict) -> bool:
+        return result.get("Status") == "Success"
+
+    @staticmethod
+    def _should_retry_result(result: Dict) -> bool:
+        status = result.get("Status", "")
+        return bool(status) and status != "Success" and not status.startswith("CAPTCHA")
+
+    def _sort_results(self):
+        self.results.sort(
+            key=lambda result: (
+                result.get(INPUT_INDEX_KEY)
+                if result.get(INPUT_INDEX_KEY) is not None
+                else len(self.input_order)
+            )
+        )
+
+    def upsert_result(self, result: Dict):
+        input_index = result.get(INPUT_INDEX_KEY)
+        if input_index is not None:
+            for index, existing in enumerate(self.results):
+                if existing.get(INPUT_INDEX_KEY) == input_index:
+                    self.results[index] = result
+                    self._sort_results()
+                    return
+        self.results.append(result)
+        self._sort_results()
+
+    def completed_indexes(self) -> set:
+        return {
+            result.get(INPUT_INDEX_KEY)
+            for result in self.results
+            if result.get(INPUT_INDEX_KEY) is not None and self._is_successful_result(result)
+        }
+
+    @staticmethod
+    def _resolve_input_index(result: Dict, saved_input_order: List[str], used_indexes: set):
+        input_index = result.get(INPUT_INDEX_KEY)
+        if input_index is not None:
+            return input_index
+
+        hs_code = result.get("HS_Code")
+        if not hs_code:
+            return None
+
+        for index, saved_hs_code in enumerate(saved_input_order):
+            if index in used_indexes:
+                continue
+            if saved_hs_code == hs_code:
+                return index
+        return None
+
+    def save_state(self, state_file: str, output_file: str):
+        path = Path(state_file)
+        payload = {
+            "output_file": output_file,
+            "input_order": self.input_order,
+            "results": self.results,
+        }
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_state(self, state_file: str):
+        path = Path(state_file)
+        if not path.exists():
+            logger.info("State file not found, starting fresh: %s", state_file)
+            return False
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("State file could not be loaded, starting fresh: %s", exc)
+            self.results = []
+            self.input_order = []
+            return False
+        if not isinstance(payload, dict):
+            logger.warning("State file has invalid structure, starting fresh")
+            self.results = []
+            self.input_order = []
+            return False
+        stored_order = payload.get("input_order", [])
+        if stored_order and not self.input_order:
+            self.input_order = stored_order
+        self.results = []
+        used_indexes = set()
+        for result in payload.get("results", []):
+            normalized_result = {**result}
+            resolved_index = self._resolve_input_index(normalized_result, stored_order, used_indexes)
+            if resolved_index is None:
+                logger.warning(
+                    "Skipping state entry without a reliable input position for HS code %s",
+                    normalized_result.get("HS_Code"),
+                )
+                continue
+            normalized_result[INPUT_INDEX_KEY] = resolved_index
+            used_indexes.add(resolved_index)
+            self.upsert_result(normalized_result)
+        self._sort_results()
+        logger.info("Loaded %d prior HS code results from %s", len(self.results), state_file)
+        return True
+
+    def save_progress(self, output_file: str, state_file: Optional[str] = None):
+        self.export_to_excel(output_file)
+        if state_file:
+            self.save_state(state_file, output_file)
+
+    def scrape_multiple(self, hs_codes: List[str], output_file: str, state_file: Optional[str] = None):
         self.navigate_to_portal()
         for index, hs_code in enumerate(hs_codes):
-            result = self.scrape_hs_code(hs_code)
-            self.results.append(result)
+            if index in self.completed_indexes():
+                logger.info("Skipping previously completed HS code %s at position %d", hs_code, index + 1)
+                continue
+
+            attempt = 0
+            result = None
+            while True:
+                attempt += 1
+                result = self.scrape_hs_code(hs_code, input_index=index)
+                result.setdefault(INPUT_INDEX_KEY, index)
+                if not self._should_retry_result(result) or attempt > self.max_retries:
+                    break
+                backoff = self.retry_backoff * (2 ** (attempt - 1))
+                logger.warning(
+                    "Retrying HS code %s after status %r (retry %d/%d) in %s seconds",
+                    hs_code,
+                    result.get("Status"),
+                    attempt,
+                    self.max_retries,
+                    backoff,
+                )
+                if backoff > 0:
+                    time.sleep(backoff)
+
+            self.upsert_result(result)
+            self.save_progress(output_file, state_file)
             if result["Status"].startswith("CAPTCHA"):
                 break
             if index < len(hs_codes) - 1:
-                time.sleep(SECTION_DELAY)
+                time.sleep(self.delay_between_codes)
         logger.info("Completed scraping %d HS codes", len(self.results))
 
     def export_to_excel(self, output_file="sat_tariff_data.xlsx"):
@@ -662,11 +820,48 @@ class SATTariffScraper:
         if self.driver:
             self.driver.quit()
 
-    def run(self, hs_codes: List[str], output_file="sat_tariff_data.xlsx"):
+    def run(
+        self,
+        hs_codes: List[str],
+        output_file="sat_tariff_data.xlsx",
+        resume=False,
+        state_file=None,
+        use_state_input_order=False,
+    ):
+        requested_hs_codes = list(hs_codes)
+        self.input_order = list(requested_hs_codes)
+        self.results = []
         try:
-            self.start_browser()
-            self.scrape_multiple(hs_codes)
-            self.export_to_excel(output_file)
+            if resume and state_file:
+                if not requested_hs_codes:
+                    self.input_order = []
+                state_loaded = self.load_state(state_file)
+                if requested_hs_codes:
+                    self.input_order = list(requested_hs_codes)
+                    self.results = [
+                        result
+                        for result in self.results
+                        if result.get(INPUT_INDEX_KEY) is not None
+                        and result.get(INPUT_INDEX_KEY) < len(self.input_order)
+                        and result.get("HS_Code") == self.input_order[result.get(INPUT_INDEX_KEY)]
+                    ]
+                elif use_state_input_order and state_loaded:
+                    requested_hs_codes = list(self.input_order)
+                else:
+                    self.input_order = []
+            self._sort_results()
+            if not requested_hs_codes:
+                self.save_progress(output_file, state_file)
+                return
+
+            if len(self.completed_indexes()) < len(requested_hs_codes):
+                self.start_browser()
+                self.scrape_multiple(
+                    requested_hs_codes,
+                    output_file=output_file,
+                    state_file=state_file,
+                )
+            self.save_progress(output_file, state_file)
         finally:
             self.close_browser()
 

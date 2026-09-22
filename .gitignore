@@ -45,6 +45,7 @@ output_tariffs.xlsx
 # Logs
 *.log
 scraper.log
+*.state.json
 
 # Chrome driver
 chromedriver

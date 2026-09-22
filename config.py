@@ -16,9 +16,12 @@ CHROME_OPTIONS = {
 WAIT_TIMEOUT = 15
 PAGE_LOAD_DELAY = 3
 REQUEST_DELAY = 2
+MAX_RETRIES = 0
+RETRY_BACKOFF = 2
 
 # Excel Configuration
 OUTPUT_FILE = "sat_tariff_data.xlsx"
+STATE_FILE_SUFFIX = ".state.json"
 
 # Header formatting
 HEADER_COLOR = "4472C4"
