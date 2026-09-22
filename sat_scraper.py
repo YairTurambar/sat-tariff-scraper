@@ -689,6 +689,23 @@ class SATTariffScraper:
             if result.get(INPUT_INDEX_KEY) is not None and self._is_successful_result(result)
         }
 
+    @staticmethod
+    def _resolve_input_index(result: Dict, saved_input_order: List[str], used_indexes: set):
+        input_index = result.get(INPUT_INDEX_KEY)
+        if input_index is not None:
+            return input_index
+
+        hs_code = result.get("HS_Code")
+        if not hs_code:
+            return None
+
+        for index, saved_hs_code in enumerate(saved_input_order):
+            if index in used_indexes:
+                continue
+            if saved_hs_code == hs_code:
+                return index
+        return None
+
     def save_state(self, state_file: str, output_file: str):
         path = Path(state_file)
         payload = {
@@ -717,9 +734,18 @@ class SATTariffScraper:
         if stored_order and not self.input_order:
             self.input_order = stored_order
         self.results = []
-        for index, result in enumerate(payload.get("results", [])):
+        used_indexes = set()
+        for result in payload.get("results", []):
             normalized_result = {**result}
-            normalized_result.setdefault(INPUT_INDEX_KEY, index)
+            resolved_index = self._resolve_input_index(normalized_result, stored_order, used_indexes)
+            if resolved_index is None:
+                logger.warning(
+                    "Skipping state entry without a reliable input position for HS code %s",
+                    normalized_result.get("HS_Code"),
+                )
+                continue
+            normalized_result[INPUT_INDEX_KEY] = resolved_index
+            used_indexes.add(resolved_index)
             self.upsert_result(normalized_result)
         self._sort_results()
         logger.info("Loaded %d prior HS code results from %s", len(self.results), state_file)

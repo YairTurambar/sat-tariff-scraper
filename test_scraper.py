@@ -1,5 +1,6 @@
 """Unit tests for SAT tariff scraper."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -500,18 +501,28 @@ class TestSATTariffScraper(unittest.TestCase):
                 os.remove(state_file)
 
     def test_run_resume_tracks_duplicate_hs_codes_by_input_position(self):
-        first_duplicate = self._result_for("0101210000", "Success", input_index=0)
-
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
             output_file = output_handle.name
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_handle:
             state_file = state_handle.name
 
         try:
-            seed_scraper = SATTariffScraper()
-            seed_scraper.input_order = ["0101210000", "0101210000"]
-            seed_scraper.results = [first_duplicate]
-            seed_scraper.save_state(state_file, output_file)
+            legacy_state = {
+                "output_file": output_file,
+                "input_order": ["0101210000", "0101210000"],
+                "results": [
+                    {
+                        "HS_Code": "0101210000",
+                        "Status": "Success",
+                        "Sections": {section_label: {} for section_label in SECTION_LABELS},
+                        "Section_Statuses": {
+                            section_label: "Success" for section_label in SECTION_LABELS
+                        },
+                    }
+                ],
+            }
+            with open(state_file, "w", encoding="utf-8") as file_handle:
+                json.dump(legacy_state, file_handle)
 
             scraper = SATTariffScraper(delay_between_codes=0, max_retries=0, retry_backoff=0)
             scraper.start_browser = lambda: None
