@@ -590,9 +590,27 @@ class TestSATTariffScraper(unittest.TestCase):
                 [("0101210000", 0), ("0102210000", 1)],
             )
             self.assertEqual(len(scraper.results), 2)
+            self.assertEqual(scraper.input_order, ["0101210000", "0102210000"])
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
+    def test_load_state_failure_clears_previous_results_and_order(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as state_handle:
+            state_handle.write("{broken json")
+            state_file = state_handle.name
+
+        try:
+            scraper = SATTariffScraper()
+            scraper.input_order = ["stale"]
+            scraper.results = [self._result_for("0101210000", "Success", input_index=0)]
+
+            self.assertFalse(scraper.load_state(state_file))
+            self.assertEqual(scraper.input_order, [])
+            self.assertEqual(scraper.results, [])
+        finally:
             if os.path.exists(state_file):
                 os.remove(state_file)
 
@@ -627,6 +645,7 @@ class TestSATTariffScraper(unittest.TestCase):
                 output_file=output_file,
                 resume=True,
                 state_file=state_file,
+                use_state_input_order=True,
             )
 
             self.assertEqual(attempted_codes, [("0102210000", 1)])

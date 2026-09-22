@@ -729,6 +729,7 @@ class SATTariffScraper:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("State file could not be loaded, starting fresh: %s", exc)
             self.results = []
+            self.input_order = []
             return False
         stored_order = payload.get("input_order", [])
         if stored_order and not self.input_order:
@@ -814,7 +815,14 @@ class SATTariffScraper:
         if self.driver:
             self.driver.quit()
 
-    def run(self, hs_codes: List[str], output_file="sat_tariff_data.xlsx", resume=False, state_file=None):
+    def run(
+        self,
+        hs_codes: List[str],
+        output_file="sat_tariff_data.xlsx",
+        resume=False,
+        state_file=None,
+        use_state_input_order=False,
+    ):
         requested_hs_codes = list(hs_codes)
         self.input_order = list(requested_hs_codes)
         self.results = []
@@ -822,7 +830,7 @@ class SATTariffScraper:
             if resume and state_file:
                 if not requested_hs_codes:
                     self.input_order = []
-                self.load_state(state_file)
+                state_loaded = self.load_state(state_file)
                 if requested_hs_codes:
                     self.input_order = list(requested_hs_codes)
                     self.results = [
@@ -832,8 +840,10 @@ class SATTariffScraper:
                         and result.get(INPUT_INDEX_KEY) < len(self.input_order)
                         and result.get("HS_Code") == self.input_order[result.get(INPUT_INDEX_KEY)]
                     ]
-                else:
+                elif use_state_input_order and state_loaded:
                     requested_hs_codes = list(self.input_order)
+                else:
+                    self.input_order = []
             self._sort_results()
             if not requested_hs_codes:
                 self.save_progress(output_file, state_file)
