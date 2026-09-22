@@ -705,13 +705,13 @@ class SATTariffScraper:
             return False
 
         payload = json.loads(path.read_text(encoding="utf-8"))
-        self.results = []
-        for result in payload.get("results", []):
-            self.upsert_result(result)
         stored_order = payload.get("input_order", [])
         if stored_order and not self.input_order:
             self.input_order = stored_order
-            self._sort_results()
+        self.results = []
+        for result in payload.get("results", []):
+            self.upsert_result(result)
+        self._sort_results()
         logger.info("Loaded %d prior HS code results from %s", len(self.results), state_file)
         return True
 
