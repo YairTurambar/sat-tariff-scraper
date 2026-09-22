@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 
 from main import build_argument_parser, load_hs_codes_from_file
 from sat_scraper import (
+    INPUT_INDEX_KEY,
     SECTION_LABELS,
     SECTION_ROWS_KEY,
     SECTION_STATUS_KEY,
@@ -22,8 +23,9 @@ class TestSATTariffScraper(unittest.TestCase):
         self.scraper = SATTariffScraper()
 
     @staticmethod
-    def _result_for(hs_code, status):
+    def _result_for(hs_code, status, input_index=None):
         return {
+            INPUT_INDEX_KEY: input_index,
             "HS_Code": hs_code,
             "Status": status,
             "Sections": {section_label: {} for section_label in SECTION_LABELS},
@@ -267,9 +269,11 @@ class TestSATTariffScraper(unittest.TestCase):
             "0102210000": [self._result_for("0102210000", "Success")],
         }
 
-        def fake_scrape_hs_code(hs_code):
+        def fake_scrape_hs_code(hs_code, input_index=None):
             attempts.append(hs_code)
-            return outcomes[hs_code].pop(0)
+            result = outcomes[hs_code].pop(0)
+            result[INPUT_INDEX_KEY] = input_index
+            return result
 
         scraper.scrape_hs_code = fake_scrape_hs_code
 
@@ -292,9 +296,9 @@ class TestSATTariffScraper(unittest.TestCase):
         scraper.export_to_excel = lambda output_file: None
         attempts = []
 
-        def fake_scrape_hs_code(hs_code):
+        def fake_scrape_hs_code(hs_code, input_index=None):
             attempts.append(hs_code)
-            return self._result_for(hs_code, "CAPTCHA solving failed")
+            return self._result_for(hs_code, "CAPTCHA solving failed", input_index=input_index)
 
         scraper.scrape_hs_code = fake_scrape_hs_code
 
@@ -430,8 +434,8 @@ class TestSATTariffScraper(unittest.TestCase):
                 os.remove(output_file)
 
     def test_run_resume_skips_successful_codes_retries_failed_codes_and_preserves_order(self):
-        successful = self._result_for("0101210000", "Success")
-        failed = self._result_for("0102210000", "Failed to submit HS code")
+        successful = self._result_for("0101210000", "Success", input_index=0)
+        failed = self._result_for("0102210000", "Failed to submit HS code", input_index=1)
 
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
             output_file = output_handle.name
@@ -450,9 +454,9 @@ class TestSATTariffScraper(unittest.TestCase):
             scraper.navigate_to_portal = lambda: None
             attempted_codes = []
 
-            def fake_scrape_hs_code(hs_code):
+            def fake_scrape_hs_code(hs_code, input_index=None):
                 attempted_codes.append(hs_code)
-                return self._result_for(hs_code, "Success")
+                return self._result_for(hs_code, "Success", input_index=input_index)
 
             scraper.scrape_hs_code = fake_scrape_hs_code
 
@@ -481,6 +485,54 @@ class TestSATTariffScraper(unittest.TestCase):
                     [sheet[f"A{row}"].value for row in range(2, 5)],
                     ["0101210000", "0102210000", "0103210000"],
                 )
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
+    def test_run_resume_tracks_duplicate_hs_codes_by_input_position(self):
+        first_duplicate = self._result_for("0101210000", "Success", input_index=0)
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
+            output_file = output_handle.name
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_handle:
+            state_file = state_handle.name
+
+        try:
+            seed_scraper = SATTariffScraper()
+            seed_scraper.input_order = ["0101210000", "0101210000"]
+            seed_scraper.results = [first_duplicate]
+            seed_scraper.save_state(state_file, output_file)
+
+            scraper = SATTariffScraper(delay_between_codes=0, max_retries=0, retry_backoff=0)
+            scraper.start_browser = lambda: None
+            scraper.close_browser = lambda: None
+            scraper.navigate_to_portal = lambda: None
+            attempted_codes = []
+
+            def fake_scrape_hs_code(hs_code, input_index=None):
+                attempted_codes.append((hs_code, input_index))
+                return self._result_for(hs_code, "Success", input_index=input_index)
+
+            scraper.scrape_hs_code = fake_scrape_hs_code
+
+            scraper.run(
+                ["0101210000", "0101210000"],
+                output_file=output_file,
+                resume=True,
+                state_file=state_file,
+            )
+
+            self.assertEqual(attempted_codes, [("0101210000", 1)])
+            self.assertEqual(
+                [result[INPUT_INDEX_KEY] for result in scraper.results],
+                [0, 1],
+            )
+            self.assertEqual(
+                [result["HS_Code"] for result in scraper.results],
+                ["0101210000", "0101210000"],
+            )
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)

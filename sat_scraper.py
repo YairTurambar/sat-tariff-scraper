@@ -41,6 +41,7 @@ SECTION_LABELS = (
     "Restricciones",
     "Cuotas",
 )
+INPUT_INDEX_KEY = "Input_Index"
 SECTION_STATUS_KEY = "__section_status__"
 SECTION_ROWS_KEY = "__section_rows__"
 
@@ -622,8 +623,9 @@ class SATTariffScraper:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
                 cell.border = border
 
-    def scrape_hs_code(self, hs_code: str):
+    def scrape_hs_code(self, hs_code: str, input_index: Optional[int] = None):
         result = {
+            INPUT_INDEX_KEY: input_index,
             "HS_Code": hs_code,
             "Sections": {section_label: {} for section_label in SECTION_LABELS},
             "Section_Statuses": {},
@@ -661,29 +663,30 @@ class SATTariffScraper:
         return bool(status) and status != "Success" and not status.startswith("CAPTCHA")
 
     def _sort_results(self):
-        if not self.input_order:
-            return
-        positions = {}
-        for index, hs_code in enumerate(self.input_order):
-            positions.setdefault(hs_code, index)
-        self.results.sort(key=lambda result: positions.get(result.get("HS_Code", ""), len(positions)))
+        self.results.sort(
+            key=lambda result: (
+                result.get(INPUT_INDEX_KEY)
+                if result.get(INPUT_INDEX_KEY) is not None
+                else len(self.input_order)
+            )
+        )
 
     def upsert_result(self, result: Dict):
-        hs_code = result.get("HS_Code")
-        if hs_code:
+        input_index = result.get(INPUT_INDEX_KEY)
+        if input_index is not None:
             for index, existing in enumerate(self.results):
-                if existing.get("HS_Code") == hs_code:
+                if existing.get(INPUT_INDEX_KEY) == input_index:
                     self.results[index] = result
                     self._sort_results()
                     return
         self.results.append(result)
         self._sort_results()
 
-    def completed_codes(self) -> set:
+    def completed_indexes(self) -> set:
         return {
-            result.get("HS_Code")
+            result.get(INPUT_INDEX_KEY)
             for result in self.results
-            if result.get("HS_Code") and self._is_successful_result(result)
+            if result.get(INPUT_INDEX_KEY) is not None and self._is_successful_result(result)
         }
 
     def save_state(self, state_file: str, output_file: str):
@@ -709,8 +712,10 @@ class SATTariffScraper:
         if stored_order and not self.input_order:
             self.input_order = stored_order
         self.results = []
-        for result in payload.get("results", []):
-            self.upsert_result(result)
+        for index, result in enumerate(payload.get("results", [])):
+            normalized_result = {**result}
+            normalized_result.setdefault(INPUT_INDEX_KEY, index)
+            self.upsert_result(normalized_result)
         self._sort_results()
         logger.info("Loaded %d prior HS code results from %s", len(self.results), state_file)
         return True
@@ -723,15 +728,16 @@ class SATTariffScraper:
     def scrape_multiple(self, hs_codes: List[str], output_file: str, state_file: Optional[str] = None):
         self.navigate_to_portal()
         for index, hs_code in enumerate(hs_codes):
-            if hs_code in self.completed_codes():
-                logger.info("Skipping previously completed HS code %s", hs_code)
+            if index in self.completed_indexes():
+                logger.info("Skipping previously completed HS code %s at position %d", hs_code, index + 1)
                 continue
 
             attempt = 0
             result = None
             while True:
                 attempt += 1
-                result = self.scrape_hs_code(hs_code)
+                result = self.scrape_hs_code(hs_code, input_index=index)
+                result.setdefault(INPUT_INDEX_KEY, index)
                 if not self._should_retry_result(result) or attempt > self.max_retries:
                     break
                 backoff = self.retry_backoff * (2 ** (attempt - 1))
@@ -783,16 +789,19 @@ class SATTariffScraper:
         try:
             if resume and state_file:
                 self.load_state(state_file)
-                requested_codes = set(self.input_order)
                 self.results = [
-                    result for result in self.results if result.get("HS_Code") in requested_codes
+                    result
+                    for result in self.results
+                    if result.get(INPUT_INDEX_KEY) is not None
+                    and result.get(INPUT_INDEX_KEY) < len(self.input_order)
+                    and result.get("HS_Code") == self.input_order[result.get(INPUT_INDEX_KEY)]
                 ]
             self._sort_results()
             if not hs_codes:
                 self.save_progress(output_file, state_file)
                 return
 
-            if len(self.completed_codes()) < len(set(hs_codes)):
+            if len(self.completed_indexes()) < len(hs_codes):
                 self.start_browser()
                 self.scrape_multiple(hs_codes, output_file=output_file, state_file=state_file)
             self.save_progress(output_file, state_file)
