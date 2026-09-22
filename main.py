@@ -130,6 +130,11 @@ def main(argv=None):
         parser.error("--max-retries must be zero or greater")
     if args.retry_backoff < 0:
         parser.error("--retry-backoff must be zero or greater")
+    if not hs_codes and not args.hs_codes_file:
+        logger.error(
+            "No HS codes provided. Usage: python main.py [hs_codes_file.txt] [output_file.xlsx]"
+        )
+        sys.exit(1)
 
     logger.info("HS Codes to process: %d", len(hs_codes))
     for code in hs_codes:

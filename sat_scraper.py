@@ -707,7 +707,12 @@ class SATTariffScraper:
             logger.info("State file not found, starting fresh: %s", state_file)
             return False
 
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("State file could not be loaded, starting fresh: %s", exc)
+            self.results = []
+            return False
         stored_order = payload.get("input_order", [])
         if stored_order and not self.input_order:
             self.input_order = stored_order

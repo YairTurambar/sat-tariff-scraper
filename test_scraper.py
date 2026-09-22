@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import main as main_module
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 
@@ -74,6 +75,13 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(args.delay_between_codes, 1.5)
         self.assertEqual(args.max_retries, 3)
         self.assertEqual(args.retry_backoff, 4)
+
+    def test_main_exits_when_no_default_hs_codes_are_configured(self):
+        with mock.patch.object(main_module, "HS_CODES", []):
+            with self.assertRaises(SystemExit) as raised:
+                main_module.main([])
+
+        self.assertEqual(raised.exception.code, 1)
 
     def test_sections_are_processed_in_requested_order(self):
         self.assertEqual(
@@ -533,6 +541,44 @@ class TestSATTariffScraper(unittest.TestCase):
                 [result["HS_Code"] for result in scraper.results],
                 ["0101210000", "0101210000"],
             )
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
+    def test_run_resume_ignores_malformed_state_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
+            output_file = output_handle.name
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as state_handle:
+            state_handle.write("{not valid json")
+            state_file = state_handle.name
+
+        try:
+            scraper = SATTariffScraper(delay_between_codes=0, max_retries=0, retry_backoff=0)
+            scraper.start_browser = lambda: None
+            scraper.close_browser = lambda: None
+            scraper.navigate_to_portal = lambda: None
+            attempted_codes = []
+
+            def fake_scrape_hs_code(hs_code, input_index=None):
+                attempted_codes.append((hs_code, input_index))
+                return self._result_for(hs_code, "Success", input_index=input_index)
+
+            scraper.scrape_hs_code = fake_scrape_hs_code
+
+            scraper.run(
+                ["0101210000", "0102210000"],
+                output_file=output_file,
+                resume=True,
+                state_file=state_file,
+            )
+
+            self.assertEqual(
+                attempted_codes,
+                [("0101210000", 0), ("0102210000", 1)],
+            )
+            self.assertEqual(len(scraper.results), 2)
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)
