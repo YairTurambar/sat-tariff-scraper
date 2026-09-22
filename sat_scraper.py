@@ -6,7 +6,7 @@ import time
 from typing import Dict, List, Optional
 
 import pandas as pd
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -31,12 +31,27 @@ SECTION_LABELS = (
     "Cuotas",
 )
 SECTION_STATUS_KEY = "__section_status__"
+SECTION_ROWS_KEY = "__section_rows__"
 
 
 class SATTariffScraper:
     """Scrape every requested SAT tariff section for each HS code."""
 
-    DUTY_COLUMNS = ("Código", "Descripción", "Código adicional", "Valor")
+    STANDARD_SECTION_COLUMNS = (
+        "Código",
+        "Descripción",
+        "Código adicional",
+        "Valor",
+        "Código de cuota",
+    )
+    NOMENCLATURE_BLOCK_LABELS = (
+        "Código de Mercancías",
+        "Códigos adicionales",
+        "Unidades de medida",
+        "Clasificadores estadísticos",
+        "Descripciones mínimas",
+        "Criterios de Clasificación",
+    )
 
     def __init__(self, headless=False, manual_captcha=True, captcha_timeout=CAPTCHA_TIMEOUT):
         self.base_url = "https://portal.sat.gob.gt/portal/arancel-integrado/"
@@ -161,80 +176,301 @@ class SATTariffScraper:
     def _cell_text(cell):
         return cell.get_text(" ", strip=True)
 
-    def _parse_all_tables(self, soup):
-        """Preserve every cell from every table, including duplicate labels."""
-        data = {}
-        for table_number, table in enumerate(soup.find_all("table"), start=1):
-            for row_number, row in enumerate(self._direct_rows(table), start=1):
-                cells = self._direct_cells(row)
-                for column_number, cell in enumerate(cells, start=1):
-                    value = self._cell_text(cell)
-                    if value:
-                        data[f"table_{table_number}_row_{row_number}_col_{column_number}"] = value
-                if len(cells) >= 2:
-                    key = self._cell_text(cells[0])
-                    value = self._cell_text(cells[1])
-                    if key and value:
-                        # Keep repeated keys instead of overwriting information.
-                        base = f"label_{key}"
-                        index = 1
-                        candidate = base
-                        while candidate in data:
-                            index += 1
-                            candidate = f"{base}_{index}"
-                        data[candidate] = value
-        return data
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "")).strip()
 
-    def _parse_leaf_key_values(self, soup):
-        data = {}
-        for element in soup.find_all(["div", "span", "p", "li"]):
-            if element.find(["div", "span", "p", "li", "table"]):
-                continue
-            text = element.get_text(" ", strip=True)
-            if ":" not in text or len(text) > 300:
-                continue
-            key, value = text.split(":", 1)
-            if key.strip() and value.strip():
-                base = f"label_{key.strip()}"
-                index = 1
-                candidate = base
-                while candidate in data:
-                    index += 1
-                    candidate = f"{base}_{index}"
-                data[candidate] = value.strip()
-        return data
+    @classmethod
+    def _normalize_label(cls, text: str) -> str:
+        return cls._normalize_text(text).rstrip(":").casefold()
 
-    def _parse_duties(self, soup):
-        """Add stable duty columns in addition to the lossless table capture."""
-        data = {}
-        treatment = "GENERAL"
+    def _table_to_rows(self, table, selected_headers=None):
+        rows = self._direct_rows(table)
+        if not rows:
+            return []
+        header_cells = self._direct_cells(rows[0])
+        headers = [
+            self._cell_text(cell) or f"Column_{index}"
+            for index, cell in enumerate(header_cells, start=1)
+        ]
+        extracted_rows = []
+        for row in rows[1:]:
+            cells = [self._cell_text(cell) for cell in self._direct_cells(row)]
+            if not any(cells):
+                continue
+            row_data = {}
+            for index, header in enumerate(headers):
+                if selected_headers and header not in selected_headers:
+                    continue
+                row_data[header] = cells[index] if index < len(cells) else ""
+            if row_data:
+                extracted_rows.append(row_data)
+        return extracted_rows
+
+    def _find_anchor(self, soup, label: str):
+        normalized_label = self._normalize_label(label)
+        for element in soup.find_all(
+            ["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "label", "legend", "span", "div", "p", "td", "th"]
+        ):
+            text = self._normalize_text(element.get_text(" ", strip=True))
+            if self._normalize_label(text) == normalized_label:
+                return element
+        return None
+
+    def _extract_labeled_value(self, soup, label: str) -> str:
+        normalized_label = self._normalize_label(label)
+
+        for row in soup.find_all("tr"):
+            cells = self._direct_cells(row)
+            if len(cells) < 2:
+                continue
+            if self._normalize_label(self._cell_text(cells[0])) == normalized_label:
+                return self._cell_text(cells[1])
+
+        label_pattern = re.compile(
+            rf"^{re.escape(self._normalize_text(label).rstrip(':'))}\s*:?\s*(.+)$",
+            re.IGNORECASE,
+        )
+        for element in soup.find_all(["div", "span", "p", "li", "td", "th", "strong", "b"]):
+            text = self._normalize_text(element.get_text(" ", strip=True))
+            if not text:
+                continue
+            match = label_pattern.match(text)
+            if match:
+                return match.group(1).strip()
+            if self._normalize_label(text) != normalized_label:
+                continue
+            for sibling in element.next_siblings:
+                if isinstance(sibling, NavigableString):
+                    value = self._normalize_text(str(sibling))
+                else:
+                    value = self._normalize_text(sibling.get_text(" ", strip=True))
+                if value:
+                    return value
+        return ""
+
+    def _find_table_after_label(self, soup, label: str, stop_labels):
+        anchor = self._find_anchor(soup, label)
+        stop_set = {self._normalize_label(item) for item in stop_labels if item != label}
+        if anchor is not None:
+            for element in anchor.find_all_next():
+                if isinstance(element, Tag):
+                    if self._normalize_label(element.get_text(" ", strip=True)) in stop_set:
+                        break
+                    if element.name == "table":
+                        return element
+        normalized_label = self._normalize_label(label)
         for table in soup.find_all("table"):
-            rows = self._direct_rows(table)
-            texts = [[self._cell_text(cell) for cell in self._direct_cells(row)] for row in rows]
-            if not texts or not all(column in texts[0] for column in self.DUTY_COLUMNS):
+            if self._normalize_label(self._infer_table_name(table, "")) == normalized_label:
+                return table
+        return None
+
+    def _extract_text_after_label(self, soup, label: str, stop_labels) -> str:
+        anchor = self._find_anchor(soup, label)
+        if anchor is None:
+            return ""
+        stop_set = {self._normalize_label(item) for item in stop_labels if item != label}
+        for element in anchor.find_all_next():
+            if isinstance(element, Tag):
+                text = self._normalize_text(element.get_text(" ", strip=True))
+                if text and self._normalize_label(text) in stop_set:
+                    break
+                if element.name == "table":
+                    return ""
+                if element.find_parent("table") is not None:
+                    continue
+                if text and self._normalize_label(text) != self._normalize_label(label):
+                    return text
+            elif isinstance(element, NavigableString):
+                text = self._normalize_text(str(element))
+                if text:
+                    return text
+        return ""
+
+    def _infer_table_name(self, table, fallback: str) -> str:
+        caption = table.find("caption")
+        if caption:
+            caption_text = self._normalize_text(caption.get_text(" ", strip=True))
+            if caption_text:
+                return caption_text
+
+        ignored_headers = {self._normalize_label(column) for column in self.STANDARD_SECTION_COLUMNS}
+        for element in table.find_all_previous(
+            ["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "label", "legend", "div", "span", "p"],
+            limit=20,
+        ):
+            if element.find_parent("table") is not None:
                 continue
-            header = texts[0]
-            indexes = {name: header.index(name) for name in self.DUTY_COLUMNS}
-            for row in texts[1:]:
-                if len(row) <= indexes["Valor"]:
-                    continue
-                code = row[indexes["Código"]]
-                if not code or code == "Código":
-                    continue
-                data[f"{code}_{treatment}"] = row[indexes["Valor"]]
-                description = row[indexes["Descripción"]]
-                if description:
-                    data.setdefault(f"{code}_Descripcion", description)
-        return data
+            text = self._normalize_text(element.get_text(" ", strip=True))
+            if not text or len(text) > 120:
+                continue
+            if self._normalize_label(text) in ignored_headers:
+                continue
+            return text
+        return fallback
+
+    def _extract_matching_message(self, soup, expected_message: str) -> str:
+        normalized_expected = self._normalize_label(expected_message)
+        for element in soup.find_all(["div", "span", "p", "li", "td", "th"]):
+            if element.find_parent("table") is not None:
+                continue
+            text = self._normalize_text(element.get_text(" ", strip=True))
+            if not text:
+                continue
+            normalized_text = self._normalize_label(text)
+            if normalized_expected in normalized_text or normalized_text in normalized_expected:
+                return text
+        return expected_message
+
+    def _parse_named_table_rows(self, soup, table_name: str, base_fields: Dict, selected_headers=None):
+        table = self._find_table_after_label(soup, table_name, self.NOMENCLATURE_BLOCK_LABELS)
+        if table is None:
+            return []
+        rows = []
+        for row_data in self._table_to_rows(table, selected_headers=selected_headers):
+            rows.append(
+                {
+                    **base_fields,
+                    "Record_Type": table_name,
+                    "Table_Name": table_name,
+                    **row_data,
+                }
+            )
+        return rows
+
+    def _standard_table_rows(self, soup, empty_message=None):
+        rows = []
+        normalized_columns = {
+            self._normalize_label(column): column for column in self.STANDARD_SECTION_COLUMNS
+        }
+        for index, table in enumerate(soup.find_all("table"), start=1):
+            table_rows = self._direct_rows(table)
+            if not table_rows:
+                continue
+            headers = [self._cell_text(cell) for cell in self._direct_cells(table_rows[0])]
+            present_headers = {
+                self._normalize_label(header): header for header in headers if header
+            }
+            if not {"código", "descripción"}.issubset(present_headers):
+                continue
+            if len(set(present_headers).intersection(normalized_columns)) < 3:
+                continue
+            table_name = self._infer_table_name(table, f"Tabla {index}")
+            for row_data in self._table_to_rows(table):
+                normalized_row = {
+                    normalized_columns[self._normalize_label(column)]: value
+                    for column, value in row_data.items()
+                    if self._normalize_label(column) in normalized_columns
+                }
+                rows.append(
+                    {
+                        "Table_Name": table_name,
+                        **{column: normalized_row.get(column, "") for column in self.STANDARD_SECTION_COLUMNS},
+                    }
+                )
+        if rows or not empty_message:
+            return rows
+        return [
+            {
+                "Table_Name": "TRATAMIENTO GENERAL",
+                "Message": self._extract_matching_message(soup, empty_message),
+            }
+        ]
+
+    def _parse_nomenclature(self, soup):
+        base_fields = {
+            "Sección": self._extract_labeled_value(soup, "Sección"),
+            "Capítulo:": self._extract_labeled_value(soup, "Capítulo:"),
+            "Fecha inicio de vigencia:": self._extract_labeled_value(soup, "Fecha inicio de vigencia:"),
+            "Fecha fin de vigencia:": self._extract_labeled_value(soup, "Fecha fin de vigencia:"),
+        }
+        base_fields = {key: value for key, value in base_fields.items() if value}
+
+        rows = []
+        rows.extend(self._parse_named_table_rows(soup, "Código de Mercancías", base_fields))
+
+        additional_rows = self._parse_named_table_rows(soup, "Códigos adicionales", base_fields)
+        if additional_rows:
+            rows.extend(additional_rows)
+        else:
+            additional_message = self._extract_text_after_label(
+                soup,
+                "Códigos adicionales",
+                self.NOMENCLATURE_BLOCK_LABELS,
+            )
+            if additional_message:
+                rows.append(
+                    {
+                        **base_fields,
+                        "Record_Type": "Códigos adicionales",
+                        "Table_Name": "Códigos adicionales",
+                        "Message": additional_message,
+                    }
+                )
+
+        rows.extend(
+            self._parse_named_table_rows(
+                soup,
+                "Unidades de medida",
+                base_fields,
+                selected_headers={"Código", "Descripción"},
+            )
+        )
+
+        for label in (
+            "Clasificadores estadísticos",
+            "Descripciones mínimas",
+            "Criterios de Clasificación",
+        ):
+            content = self._extract_text_after_label(
+                soup,
+                label,
+                self.NOMENCLATURE_BLOCK_LABELS,
+            )
+            if content:
+                rows.append(
+                    {
+                        **base_fields,
+                        "Record_Type": label,
+                        "Table_Name": label,
+                        "Content": content,
+                    }
+                )
+
+        if not rows and base_fields:
+            rows.append({**base_fields, "Record_Type": "Resumen", "Table_Name": "Nomenclatura"})
+
+        return {
+            SECTION_ROWS_KEY: rows,
+            SECTION_STATUS_KEY: None if rows else "No data found",
+        }
+
+    def _parse_standard_section(self, soup, empty_message=""):
+        rows = self._standard_table_rows(soup, empty_message=empty_message)
+        return {
+            SECTION_ROWS_KEY: rows,
+            SECTION_STATUS_KEY: None if rows else "No data found",
+        }
 
     def extract_section_data(self, section_label):
-        """Extract all visible information from the currently open section."""
+        """Extract all required visible information from the currently open section."""
         soup = BeautifulSoup(self.driver.page_source, "html.parser")
-        data = self._parse_all_tables(soup)
-        data.update(self._parse_leaf_key_values(soup))
-        if section_label == "Derechos e impuestos":
-            data.update(self._parse_duties(soup))
-        return data or {SECTION_STATUS_KEY: "No data found"}
+        parsers = {
+            "Derechos e impuestos": lambda page: self._parse_standard_section(page),
+            "Nomenclatura": self._parse_nomenclature,
+            "Restricciones": lambda page: self._parse_standard_section(page),
+            "Cuotas": lambda page: self._parse_standard_section(
+                page,
+                empty_message=(
+                    "No se han encontrado cuotas/contingentes "
+                    "para el inciso consultado"
+                ),
+            ),
+        }
+        data = parsers.get(section_label, lambda page: {SECTION_ROWS_KEY: []})(soup)
+        if data.get(SECTION_ROWS_KEY):
+            return data
+        return data or {SECTION_ROWS_KEY: [], SECTION_STATUS_KEY: "No data found"}
 
     _SECTION_JS = """
     var form = document.forms['frmBuscar'];
@@ -329,10 +565,10 @@ class SATTariffScraper:
         return "Success"
 
     @staticmethod
-    def _build_section_row(result: Dict, section_label: str) -> Dict:
+    def _build_section_rows(result: Dict, section_label: str) -> List[Dict]:
         section_statuses = result.get("Section_Statuses", {})
         overall_status = result.get("Status", "")
-        row = {
+        base_row = {
             "HS_Code": result.get("HS_Code", ""),
             "Status": SATTariffScraper._build_section_status(
                 overall_status,
@@ -340,13 +576,10 @@ class SATTariffScraper:
             ),
             "Overall_Status": overall_status,
         }
-        section_data = {
-            key: value
-            for key, value in result.get("Sections", {}).get(section_label, {}).items()
-            if key != SECTION_STATUS_KEY
-        }
-        row.update(section_data)
-        return row
+        section_rows = result.get("Sections", {}).get(section_label, {}).get(SECTION_ROWS_KEY, [])
+        if section_rows:
+            return [{**base_row, **section_row} for section_row in section_rows]
+        return [base_row]
 
     @staticmethod
     def _format_worksheet(worksheet):
@@ -409,7 +642,9 @@ class SATTariffScraper:
     def export_to_excel(self, output_file="sat_tariff_data.xlsx"):
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
             for section_label in SECTION_LABELS:
-                rows = [self._build_section_row(result, section_label) for result in self.results]
+                rows = []
+                for result in self.results:
+                    rows.extend(self._build_section_rows(result, section_label))
                 df = pd.DataFrame(rows)
                 if df.empty:
                     df = pd.DataFrame(columns=["HS_Code", "Status", "Overall_Status"])
