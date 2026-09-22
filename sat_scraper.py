@@ -731,6 +731,11 @@ class SATTariffScraper:
             self.results = []
             self.input_order = []
             return False
+        if not isinstance(payload, dict):
+            logger.warning("State file has invalid structure, starting fresh")
+            self.results = []
+            self.input_order = []
+            return False
         stored_order = payload.get("input_order", [])
         if stored_order and not self.input_order:
             self.input_order = stored_order

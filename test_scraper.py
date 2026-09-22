@@ -614,6 +614,20 @@ class TestSATTariffScraper(unittest.TestCase):
             if os.path.exists(state_file):
                 os.remove(state_file)
 
+    def test_load_state_rejects_non_mapping_payloads(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as state_handle:
+            json.dump([], state_handle)
+            state_file = state_handle.name
+
+        try:
+            scraper = SATTariffScraper()
+            self.assertFalse(scraper.load_state(state_file))
+            self.assertEqual(scraper.input_order, [])
+            self.assertEqual(scraper.results, [])
+        finally:
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
     def test_run_resume_without_explicit_hs_codes_uses_state_input_order(self):
         state_payload = {
             "output_file": "ignored.xlsx",
