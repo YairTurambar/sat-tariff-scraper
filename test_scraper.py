@@ -596,6 +596,50 @@ class TestSATTariffScraper(unittest.TestCase):
             if os.path.exists(state_file):
                 os.remove(state_file)
 
+    def test_run_resume_without_explicit_hs_codes_uses_state_input_order(self):
+        state_payload = {
+            "output_file": "ignored.xlsx",
+            "input_order": ["0101210000", "0102210000"],
+            "results": [self._result_for("0101210000", "Success", input_index=0)],
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
+            output_file = output_handle.name
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as state_handle:
+            json.dump(state_payload, state_handle)
+            state_file = state_handle.name
+
+        try:
+            scraper = SATTariffScraper(delay_between_codes=0, max_retries=0, retry_backoff=0)
+            scraper.start_browser = lambda: None
+            scraper.close_browser = lambda: None
+            scraper.navigate_to_portal = lambda: None
+            attempted_codes = []
+
+            def fake_scrape_hs_code(hs_code, input_index=None):
+                attempted_codes.append((hs_code, input_index))
+                return self._result_for(hs_code, "Success", input_index=input_index)
+
+            scraper.scrape_hs_code = fake_scrape_hs_code
+
+            scraper.run(
+                [],
+                output_file=output_file,
+                resume=True,
+                state_file=state_file,
+            )
+
+            self.assertEqual(attempted_codes, [("0102210000", 1)])
+            self.assertEqual(
+                [result["HS_Code"] for result in scraper.results],
+                ["0101210000", "0102210000"],
+            )
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
     def test_run_with_no_codes_creates_empty_four_sheet_workbook(self):
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as output_handle:
             output_file = output_handle.name

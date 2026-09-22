@@ -815,26 +815,37 @@ class SATTariffScraper:
             self.driver.quit()
 
     def run(self, hs_codes: List[str], output_file="sat_tariff_data.xlsx", resume=False, state_file=None):
-        self.input_order = list(hs_codes)
+        requested_hs_codes = list(hs_codes)
+        self.input_order = list(requested_hs_codes)
         self.results = []
         try:
             if resume and state_file:
+                if not requested_hs_codes:
+                    self.input_order = []
                 self.load_state(state_file)
-                self.results = [
-                    result
-                    for result in self.results
-                    if result.get(INPUT_INDEX_KEY) is not None
-                    and result.get(INPUT_INDEX_KEY) < len(self.input_order)
-                    and result.get("HS_Code") == self.input_order[result.get(INPUT_INDEX_KEY)]
-                ]
+                if requested_hs_codes:
+                    self.input_order = list(requested_hs_codes)
+                    self.results = [
+                        result
+                        for result in self.results
+                        if result.get(INPUT_INDEX_KEY) is not None
+                        and result.get(INPUT_INDEX_KEY) < len(self.input_order)
+                        and result.get("HS_Code") == self.input_order[result.get(INPUT_INDEX_KEY)]
+                    ]
+                else:
+                    requested_hs_codes = list(self.input_order)
             self._sort_results()
-            if not hs_codes:
+            if not requested_hs_codes:
                 self.save_progress(output_file, state_file)
                 return
 
-            if len(self.completed_indexes()) < len(hs_codes):
+            if len(self.completed_indexes()) < len(requested_hs_codes):
                 self.start_browser()
-                self.scrape_multiple(hs_codes, output_file=output_file, state_file=state_file)
+                self.scrape_multiple(
+                    requested_hs_codes,
+                    output_file=output_file,
+                    state_file=state_file,
+                )
             self.save_progress(output_file, state_file)
         finally:
             self.close_browser()
