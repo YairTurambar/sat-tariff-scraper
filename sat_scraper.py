@@ -644,7 +644,7 @@ class SATTariffScraper:
     @staticmethod
     def _ascii_upper(text: str) -> str:
         normalized = unicodedata.normalize("NFKD", text or "")
-        return "".join(char for char in normalized if not unicodedata.combining(char)).upper()
+        return normalized.encode("ascii", "ignore").decode("ascii").upper()
 
     @classmethod
     def _agreement_suffix(cls, table_name: str) -> str:
@@ -814,10 +814,12 @@ class SATTariffScraper:
 
     def _ordered_columns_for_section(self, section_label: str, rows: List[Dict]) -> List[str]:
         seen_columns = []
+        seen_column_set = set()
         for row in rows:
             for column in row:
-                if column not in seen_columns:
+                if column not in seen_column_set:
                     seen_columns.append(column)
+                    seen_column_set.add(column)
 
         if section_label == "Derechos e impuestos":
             duty_columns = sorted(
@@ -961,11 +963,15 @@ class SATTariffScraper:
                 end_column=column_index,
             )
 
+        column_positions = {
+            column_name: index
+            for index, column_name in enumerate(ordered_columns, start=1)
+        }
         for group_name, columns in grouped_columns.items():
             positions = [
-                ordered_columns.index(column_name) + 1
+                column_positions[column_name]
                 for column_name in columns
-                if column_name in ordered_columns
+                if column_name in column_positions
             ]
             if not positions:
                 continue
