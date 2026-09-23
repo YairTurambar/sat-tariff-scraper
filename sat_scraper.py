@@ -708,7 +708,7 @@ class SATTariffScraper:
         if not section_rows:
             return [base_row]
 
-        grouped_rows = defaultdict(list)
+        grouped_rows = {}
         ordered_keys = []
         for section_row in section_rows:
             key = (
@@ -717,23 +717,21 @@ class SATTariffScraper:
             )
             if key not in grouped_rows:
                 ordered_keys.append(key)
-
-            export_column = self._duty_column_name(section_row)
-            export_rows = grouped_rows[key]
-            target_row = next(
-                (row for row in export_rows if export_column and export_column not in row),
-                None,
-            )
-            if target_row is None:
-                target_row = {
+                grouped_rows[key] = {
                     **base_row,
                     "Código adicional": key[0],
                     "Código de cuota": key[1],
                 }
-                export_rows.append(target_row)
+            target_row = grouped_rows[key]
+            export_column = self._duty_column_name(section_row)
 
             if export_column:
-                target_row[export_column] = section_row.get("Valor", "")
+                existing_value = target_row.get(export_column, "")
+                new_value = section_row.get("Valor", "")
+                if existing_value and new_value:
+                    target_row[export_column] = f"{existing_value}\n{new_value}"
+                elif new_value:
+                    target_row[export_column] = new_value
             table_name = section_row.get("Table_Name", "")
             if table_name:
                 existing_table_names = target_row.get("Table_Name", "")
@@ -751,10 +749,7 @@ class SATTariffScraper:
                     continue
                 target_row[key_name] = value
 
-        rows = []
-        for key in ordered_keys:
-            rows.extend(grouped_rows[key])
-        return rows
+        return [grouped_rows[key] for key in ordered_keys]
 
     def _build_nomenclature_sheet_rows(self, result: Dict) -> List[Dict]:
         base_row = self._base_export_row(result, "Nomenclatura")

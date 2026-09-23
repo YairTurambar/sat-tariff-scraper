@@ -23,7 +23,7 @@ Each worksheet contains:
   - `Restricciones`: ordered columns `Código`, `Descripción`, `Código adicional`, `Valor`, `Código de cuota`
   - `Cuotas`: a dedicated `Resultado` column containing the SAT message/result text
 
-If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code` and `Status`.
+If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code`, `Status`, and `Overall_Status`.
 
 ### Normalized section output
 
