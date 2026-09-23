@@ -696,7 +696,7 @@ class SATTariffScraper:
         if not message:
             return ""
         prefix = "Resultados de la búsqueda:"
-        normalized_message = SATTariffScraper._ascii_upper(message)
+        normalized_message = SATTariffScraper._ascii_upper(message.lstrip())
         normalized_prefix = SATTariffScraper._ascii_upper(prefix)
         if normalized_message.startswith(normalized_prefix):
             return message

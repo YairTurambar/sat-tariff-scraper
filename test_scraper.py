@@ -294,6 +294,8 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(self.scraper._format_quota_message(prefixed), prefixed)
         decomposed = unicodedata.normalize("NFD", prefixed)
         self.assertEqual(self.scraper._format_quota_message(decomposed), decomposed)
+        spaced = f"\n  {prefixed}"
+        self.assertEqual(self.scraper._format_quota_message(spaced), spaced)
 
     def test_scrape_hs_code_reflects_non_success_section_status(self):
         expected_data = {
