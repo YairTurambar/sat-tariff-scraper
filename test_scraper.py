@@ -285,6 +285,13 @@ class TestSATTariffScraper(unittest.TestCase):
         )
         self.assertIsNone(data[SECTION_STATUS_KEY])
 
+    def test_format_quota_message_does_not_duplicate_prefix(self):
+        prefixed = (
+            "Resultados de la búsqueda: "
+            "No se han encontrado cuotas/contingentes para el inciso consultado"
+        )
+        self.assertEqual(self.scraper._format_quota_message(prefixed), prefixed)
+
     def test_scrape_hs_code_reflects_non_success_section_status(self):
         expected_data = {
             "Derechos e impuestos": {SECTION_ROWS_KEY: [{"Table_Name": "TRATAMIENTO GENERAL"}]},

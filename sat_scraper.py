@@ -64,6 +64,19 @@ class SATTariffScraper:
     )
     DUTY_TRAILING_COLUMNS = ("Código adicional", "Código de cuota")
     DUTY_GROUP_ORDER = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+    DUTY_GROUP_ALIASES = {
+        "GENERAL": ("GENERAL",),
+        "MX": ("MEXICO",),
+        "CL": ("CHILE",),
+        "ADAE": ("ADAE",),
+        "CO": ("COLOMBIA",),
+        "UK": ("REINO UNIDO", "UNITED KINGDOM"),
+        "US": ("ESTADOS UNIDOS", "UNITED STATES"),
+        "PE": ("PERU",),
+        "TW": ("TAIWAN",),
+        "DO": ("DOMINICANA",),
+        "CU": ("CUBA",),
+    }
     NOMENCLATURE_BLOCK_LABELS = (
         "Código de Mercancías",
         "Códigos adicionales",
@@ -649,35 +662,10 @@ class SATTariffScraper:
     @classmethod
     def _agreement_suffix(cls, table_name: str) -> str:
         normalized = cls._ascii_upper(table_name)
-        if "GENERAL" in normalized:
-            return "GENERAL"
-
-        alias_map = (
-            ("MEXICO", "MX"),
-            ("CHILE", "CL"),
-            ("ADAE", "ADAE"),
-            ("COLOMBIA", "CO"),
-            ("REINO UNIDO", "UK"),
-            ("UNITED KINGDOM", "UK"),
-            ("ESTADOS UNIDOS", "US"),
-            ("UNITED STATES", "US"),
-            ("PERU", "PE"),
-            ("TAIWAN", "TW"),
-            ("DOMINICANA", "DO"),
-            ("CUBA", "CU"),
-        )
-        for needle, suffix in alias_map:
-            if needle in normalized:
+        for suffix, aliases in cls.DUTY_GROUP_ALIASES.items():
+            if any(alias in normalized for alias in aliases):
                 return suffix
-
-        tokens = re.findall(r"[A-Z0-9]{2,}", normalized)
-        ignored = {"TLC", "TRATAMIENTO", "ACUERDO", "LIBRE", "COMERCIO", "GUATEMALA"}
-        for token in reversed(tokens):
-            if token not in ignored:
-                return token
-
-        slug = re.sub(r"[^A-Z0-9]+", "_", normalized).strip("_")
-        return slug or "OTRO"
+        return "OTRO"
 
     @classmethod
     def _duty_column_name(cls, row: Dict) -> str:
@@ -696,6 +684,12 @@ class SATTariffScraper:
             else len(cls.DUTY_GROUP_ORDER)
         )
         return (suffix_index, suffix, prefix, column_name)
+
+    @classmethod
+    def _is_duty_value_column(cls, column_name: str) -> bool:
+        if "_" not in column_name:
+            return False
+        return column_name.rsplit("_", 1)[1] in set(cls.DUTY_GROUP_ORDER + ("OTRO",))
 
     @staticmethod
     def _format_quota_message(message: str) -> str:
@@ -737,6 +731,15 @@ class SATTariffScraper:
 
             if export_column:
                 target_row[export_column] = section_row.get("Valor", "")
+            table_name = section_row.get("Table_Name", "")
+            if table_name:
+                existing_table_names = target_row.get("Table_Name", "")
+                if table_name not in existing_table_names.split(" | "):
+                    target_row["Table_Name"] = (
+                        f"{existing_table_names} | {table_name}".strip(" | ")
+                        if existing_table_names
+                        else table_name
+                    )
 
             for key_name, value in section_row.items():
                 if key_name in {"Table_Name", "Código", "Descripción", "Valor"}:
@@ -826,7 +829,7 @@ class SATTariffScraper:
                 [
                     column
                     for column in seen_columns
-                    if column not in set(self.BASE_EXPORT_COLUMNS + self.DUTY_TRAILING_COLUMNS)
+                    if self._is_duty_value_column(column)
                 ],
                 key=self._duty_sort_key,
             )
@@ -873,11 +876,10 @@ class SATTariffScraper:
             grouped_columns = defaultdict(list)
             pivot_columns = []
             for column in ordered_columns:
-                if column in cls.BASE_EXPORT_COLUMNS or column in cls.DUTY_TRAILING_COLUMNS:
+                if not cls._is_duty_value_column(column):
                     continue
-                if "_" in column:
-                    pivot_columns.append(column)
-                    grouped_columns[column.rsplit("_", 1)[1]].append(column)
+                pivot_columns.append(column)
+                grouped_columns[column.rsplit("_", 1)[1]].append(column)
             return {
                 "header_rows": 2 if pivot_columns else 1,
                 "grouped_columns": dict(grouped_columns),
@@ -886,14 +888,17 @@ class SATTariffScraper:
             }
 
         if section_label == "Nomenclatura":
+            unit_columns = [
+                column_name
+                for column_name in (
+                    "Unidades de medida - Código",
+                    "Unidades de medida - Descripción",
+                )
+                if column_name in ordered_columns
+            ]
             return {
-                "header_rows": 2,
-                "grouped_columns": {
-                    "Unidades de medida": [
-                        "Unidades de medida - Código",
-                        "Unidades de medida - Descripción",
-                    ]
-                },
+                "header_rows": 2 if unit_columns else 1,
+                "grouped_columns": {"Unidades de medida": unit_columns} if unit_columns else {},
                 "group_display_labels": {},
                 "child_header_labels": {
                     "Unidades de medida - Código": "Código",
