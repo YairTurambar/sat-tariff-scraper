@@ -17,18 +17,19 @@ Each worksheet contains:
 - `Status`
 - `Overall_Status`
 - normalized, section-specific extracted fields for that SAT section
+- grouped blue headers in the generated workbook where SAT presents grouped data, including:
+  - `Derechos e impuestos`: agreement/treatment duty columns such as `DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, `DAI_CL`, etc., followed by `Código adicional` and `Código de cuota`
+  - `Nomenclatura`: leading scalar columns plus the grouped `Unidades de medida` header with child columns `Código` and `Descripción`
+  - `Restricciones`: ordered columns `Código`, `Descripción`, `Código adicional`, `Valor`, `Código de cuota`
+  - `Cuotas`: a dedicated `Resultado` column containing the SAT message/result text
 
-If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code` and `Status`.
+If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code`, `Status`, and `Overall_Status`.
 
 ### Normalized section output
 
-- `Derechos e impuestos`, `Restricciones`, and `Cuotas` are exported as one row per source treatment/agreement table row, preserving:
-  - `Table_Name`
-  - `Código`
-  - `Descripción`
-  - `Código adicional`
-  - `Valor`
-  - `Código de cuota`
+- `Derechos e impuestos` is exported with agreement-specific duty columns per HS row so that each treatment remains in its own column instead of a generic row blob
+- `Restricciones` is exported as one row per source restriction row, preserving duplicates and keeping `Código`, `Descripción`, `Código adicional`, `Valor`, and `Código de cuota` in that order
+- `Cuotas` writes the SAT portal result text to `Resultado`, including the empty-state wording when no quota exists, while preserving raw extracted fields after the required columns
 - `Nomenclatura` is exported as one row per named table/content block, preserving the scalar fields:
   - `Sección`
   - `Capítulo:`
