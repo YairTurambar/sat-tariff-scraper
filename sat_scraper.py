@@ -4,12 +4,15 @@ import json
 import logging
 import re
 import time
+import unicodedata
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
 from bs4 import BeautifulSoup, NavigableString, Tag
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
@@ -19,6 +22,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
+    HEADER_COLOR,
+    HEADER_TEXT_COLOR,
     MAX_RETRIES,
     PAGE_LOAD_DELAY,
     REQUEST_DELAY,
@@ -49,6 +54,7 @@ SECTION_ROWS_KEY = "__section_rows__"
 class SATTariffScraper:
     """Scrape every requested SAT tariff section for each HS code."""
 
+    BASE_EXPORT_COLUMNS = ("HS_Code", "Status", "Overall_Status")
     STANDARD_SECTION_COLUMNS = (
         "Código",
         "Descripción",
@@ -56,6 +62,8 @@ class SATTariffScraper:
         "Valor",
         "Código de cuota",
     )
+    DUTY_TRAILING_COLUMNS = ("Código adicional", "Código de cuota")
+    DUTY_GROUP_ORDER = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
     NOMENCLATURE_BLOCK_LABELS = (
         "Código de Mercancías",
         "Códigos adicionales",
@@ -63,6 +71,21 @@ class SATTariffScraper:
         "Clasificadores estadísticos",
         "Descripciones mínimas",
         "Criterios de Clasificación",
+    )
+    NOMENCLATURE_SCALAR_COLUMNS = (
+        "Sección",
+        "Capítulo:",
+        "Fecha inicio de vigencia:",
+        "Fecha fin de vigencia:",
+    )
+    NOMENCLATURE_REQUIRED_COLUMNS = (
+        "Sección",
+        "Capítulo:",
+        "Fecha inicio de vigencia:",
+        "Fecha fin de vigencia:",
+        "Códigos adicionales",
+        "Unidades de medida - Código",
+        "Unidades de medida - Descripción",
     )
 
     def __init__(
@@ -606,22 +629,356 @@ class SATTariffScraper:
         return [base_row]
 
     @staticmethod
-    def _format_worksheet(worksheet):
-        border = Border(*(Side(style="thin"),) * 4)
-        for column in worksheet.columns:
-            letter = column[0].column_letter
-            worksheet.column_dimensions[letter].width = min(
-                max(len(str(cell.value or "")) for cell in column) + 2, 60
+    def _base_export_row(result: Dict, section_label: str) -> Dict:
+        section_statuses = result.get("Section_Statuses", {})
+        overall_status = result.get("Status", "")
+        return {
+            "HS_Code": result.get("HS_Code", ""),
+            "Status": SATTariffScraper._build_section_status(
+                overall_status,
+                section_statuses.get(section_label),
+            ),
+            "Overall_Status": overall_status,
+        }
+
+    @staticmethod
+    def _ascii_upper(text: str) -> str:
+        normalized = unicodedata.normalize("NFKD", text or "")
+        return "".join(char for char in normalized if not unicodedata.combining(char)).upper()
+
+    @classmethod
+    def _agreement_suffix(cls, table_name: str) -> str:
+        normalized = cls._ascii_upper(table_name)
+        if "GENERAL" in normalized:
+            return "GENERAL"
+
+        alias_map = (
+            ("MEXICO", "MX"),
+            ("CHILE", "CL"),
+            ("ADAE", "ADAE"),
+            ("COLOMBIA", "CO"),
+            ("REINO UNIDO", "UK"),
+            ("UNITED KINGDOM", "UK"),
+            ("ESTADOS UNIDOS", "US"),
+            ("UNITED STATES", "US"),
+            ("PERU", "PE"),
+            ("TAIWAN", "TW"),
+            ("DOMINICANA", "DO"),
+            ("CUBA", "CU"),
+        )
+        for needle, suffix in alias_map:
+            if needle in normalized:
+                return suffix
+
+        tokens = re.findall(r"[A-Z0-9]{2,}", normalized)
+        ignored = {"TLC", "TRATAMIENTO", "ACUERDO", "LIBRE", "COMERCIO", "GUATEMALA"}
+        for token in reversed(tokens):
+            if token not in ignored:
+                return token
+
+        slug = re.sub(r"[^A-Z0-9]+", "_", normalized).strip("_")
+        return slug or "OTRO"
+
+    @classmethod
+    def _duty_column_name(cls, row: Dict) -> str:
+        code = re.sub(r"[^A-Z0-9]+", "_", cls._ascii_upper(row.get("Código", ""))).strip("_")
+        suffix = cls._agreement_suffix(row.get("Table_Name", ""))
+        if not code:
+            return ""
+        return f"{code}_{suffix}"
+
+    @classmethod
+    def _duty_sort_key(cls, column_name: str):
+        prefix, _, suffix = column_name.partition("_")
+        suffix_index = (
+            cls.DUTY_GROUP_ORDER.index(suffix)
+            if suffix in cls.DUTY_GROUP_ORDER
+            else len(cls.DUTY_GROUP_ORDER)
+        )
+        return (suffix_index, suffix, prefix, column_name)
+
+    @staticmethod
+    def _format_quota_message(message: str) -> str:
+        if not message:
+            return ""
+        if message.startswith("Resultados de la búsqueda:"):
+            return message
+        return f"Resultados de la búsqueda: {message}"
+
+    def _build_duties_sheet_rows(self, result: Dict) -> List[Dict]:
+        base_row = self._base_export_row(result, "Derechos e impuestos")
+        section_rows = result.get("Sections", {}).get("Derechos e impuestos", {}).get(SECTION_ROWS_KEY, [])
+        if not section_rows:
+            return [base_row]
+
+        grouped_rows = defaultdict(list)
+        ordered_keys = []
+        for section_row in section_rows:
+            key = (
+                section_row.get("Código adicional", ""),
+                section_row.get("Código de cuota", ""),
             )
-        for cell in worksheet[1]:
-            cell.fill = PatternFill("solid", fgColor="4472C4")
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
-            cell.border = border
-        for row in worksheet.iter_rows(min_row=2):
+            if key not in grouped_rows:
+                ordered_keys.append(key)
+
+            export_column = self._duty_column_name(section_row)
+            export_rows = grouped_rows[key]
+            target_row = next(
+                (row for row in export_rows if export_column and export_column not in row),
+                None,
+            )
+            if target_row is None:
+                target_row = {
+                    **base_row,
+                    "Código adicional": key[0],
+                    "Código de cuota": key[1],
+                }
+                export_rows.append(target_row)
+
+            if export_column:
+                target_row[export_column] = section_row.get("Valor", "")
+
+            for key_name, value in section_row.items():
+                if key_name in {"Table_Name", "Código", "Descripción", "Valor"}:
+                    continue
+                if key_name in target_row and target_row[key_name] not in {"", value}:
+                    continue
+                target_row[key_name] = value
+
+        rows = []
+        for key in ordered_keys:
+            rows.extend(grouped_rows[key])
+        return rows
+
+    def _build_nomenclature_sheet_rows(self, result: Dict) -> List[Dict]:
+        base_row = self._base_export_row(result, "Nomenclatura")
+        section_rows = result.get("Sections", {}).get("Nomenclatura", {}).get(SECTION_ROWS_KEY, [])
+        if not section_rows:
+            return [base_row]
+
+        rows = []
+        for section_row in section_rows:
+            export_row = {**base_row, **section_row}
+            export_row.setdefault("Códigos adicionales", "")
+            export_row.setdefault("Unidades de medida - Código", "")
+            export_row.setdefault("Unidades de medida - Descripción", "")
+
+            if section_row.get("Record_Type") == "Códigos adicionales":
+                export_row["Códigos adicionales"] = (
+                    section_row.get("Message")
+                    or section_row.get("Content")
+                    or section_row.get("Descripción")
+                    or section_row.get("Código", "")
+                )
+            if section_row.get("Record_Type") == "Unidades de medida":
+                export_row["Unidades de medida - Código"] = section_row.get("Código", "")
+                export_row["Unidades de medida - Descripción"] = section_row.get("Descripción", "")
+            rows.append(export_row)
+        return rows
+
+    def _build_restrictions_sheet_rows(self, result: Dict) -> List[Dict]:
+        return self._build_section_rows(result, "Restricciones")
+
+    def _build_quotas_sheet_rows(self, result: Dict) -> List[Dict]:
+        base_row = self._base_export_row(result, "Cuotas")
+        section_rows = result.get("Sections", {}).get("Cuotas", {}).get(SECTION_ROWS_KEY, [])
+        if not section_rows:
+            return [base_row]
+
+        rows = []
+        for section_row in section_rows:
+            export_row = {**base_row, **section_row}
+            message = section_row.get("Message")
+            if message:
+                export_row["Resultado"] = self._format_quota_message(message)
+            else:
+                export_row["Resultado"] = "; ".join(
+                    f"{column}: {section_row[column]}"
+                    for column in self.STANDARD_SECTION_COLUMNS
+                    if section_row.get(column)
+                )
+            rows.append(export_row)
+        return rows
+
+    def _build_sheet_rows(self, section_label: str) -> List[Dict]:
+        builders = {
+            "Derechos e impuestos": self._build_duties_sheet_rows,
+            "Nomenclatura": self._build_nomenclature_sheet_rows,
+            "Restricciones": self._build_restrictions_sheet_rows,
+            "Cuotas": self._build_quotas_sheet_rows,
+        }
+        rows = []
+        for result in self.results:
+            rows.extend(builders[section_label](result))
+        return rows
+
+    def _ordered_columns_for_section(self, section_label: str, rows: List[Dict]) -> List[str]:
+        seen_columns = []
+        for row in rows:
+            for column in row:
+                if column not in seen_columns:
+                    seen_columns.append(column)
+
+        if section_label == "Derechos e impuestos":
+            duty_columns = sorted(
+                [
+                    column
+                    for column in seen_columns
+                    if column not in set(self.BASE_EXPORT_COLUMNS + self.DUTY_TRAILING_COLUMNS)
+                ],
+                key=self._duty_sort_key,
+            )
+            return list(self.BASE_EXPORT_COLUMNS) + duty_columns + [
+                column
+                for column in self.DUTY_TRAILING_COLUMNS
+                if column in seen_columns or column in {"Código adicional", "Código de cuota"}
+            ] + [
+                column
+                for column in seen_columns
+                if column
+                not in set(
+                    list(self.BASE_EXPORT_COLUMNS)
+                    + duty_columns
+                    + list(self.DUTY_TRAILING_COLUMNS)
+                )
+            ]
+
+        if section_label == "Nomenclatura":
+            required_columns = list(self.BASE_EXPORT_COLUMNS) + list(self.NOMENCLATURE_REQUIRED_COLUMNS)
+            return required_columns + [
+                column for column in seen_columns if column not in required_columns
+            ]
+
+        if section_label == "Restricciones":
+            required_columns = list(self.BASE_EXPORT_COLUMNS) + list(self.STANDARD_SECTION_COLUMNS)
+            return required_columns + [
+                column for column in seen_columns if column not in required_columns
+            ]
+
+        required_columns = list(self.BASE_EXPORT_COLUMNS) + ["Resultado"]
+        return required_columns + [column for column in seen_columns if column not in required_columns]
+
+    @classmethod
+    def _build_header_layout(cls, section_label: str, ordered_columns: List[str]) -> Dict:
+        if section_label == "Derechos e impuestos":
+            grouped_columns = defaultdict(list)
+            pivot_columns = []
+            for column in ordered_columns:
+                if column in cls.BASE_EXPORT_COLUMNS or column in cls.DUTY_TRAILING_COLUMNS:
+                    continue
+                if "_" in column:
+                    pivot_columns.append(column)
+                    grouped_columns[column.rsplit("_", 1)[1]].append(column)
+            return {
+                "header_rows": 2 if pivot_columns else 1,
+                "grouped_columns": dict(grouped_columns),
+                "group_display_labels": {},
+                "child_header_labels": {},
+            }
+
+        if section_label == "Nomenclatura":
+            return {
+                "header_rows": 2,
+                "grouped_columns": {
+                    "Unidades de medida": [
+                        "Unidades de medida - Código",
+                        "Unidades de medida - Descripción",
+                    ]
+                },
+                "group_display_labels": {},
+                "child_header_labels": {
+                    "Unidades de medida - Código": "Código",
+                    "Unidades de medida - Descripción": "Descripción",
+                },
+            }
+
+        return {
+            "header_rows": 1,
+            "grouped_columns": {},
+            "group_display_labels": {},
+            "child_header_labels": {},
+        }
+
+    @staticmethod
+    def _format_worksheet(worksheet, header_rows=1):
+        border = Border(*(Side(style="thin"),) * 4)
+        for column_index in range(1, worksheet.max_column + 1):
+            letter = get_column_letter(column_index)
+            values = [
+                len(str(worksheet.cell(row=row_index, column=column_index).value or ""))
+                for row_index in range(1, worksheet.max_row + 1)
+            ]
+            worksheet.column_dimensions[letter].width = min(max(values, default=0) + 2, 60)
+
+        header_fill = PatternFill("solid", fgColor=HEADER_COLOR)
+        header_font = Font(bold=True, color=HEADER_TEXT_COLOR)
+        for row_index in range(1, header_rows + 1):
+            worksheet.row_dimensions[row_index].height = 22
+            for cell in worksheet[row_index]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+                cell.border = border
+
+        for row in worksheet.iter_rows(min_row=header_rows + 1):
             for cell in row:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
                 cell.border = border
+        worksheet.freeze_panes = f"A{header_rows + 1}"
+
+    @staticmethod
+    def _apply_grouped_headers(worksheet, ordered_columns: List[str], header_layout: Dict):
+        header_rows = header_layout["header_rows"]
+        if header_rows == 1:
+            return
+
+        grouped_columns = header_layout["grouped_columns"]
+        group_members = {
+            column
+            for columns in grouped_columns.values()
+            for column in columns
+        }
+        child_labels = header_layout.get("child_header_labels", {})
+        group_labels = header_layout.get("group_display_labels", {})
+
+        for column_index, column_name in enumerate(ordered_columns, start=1):
+            worksheet.cell(
+                row=2,
+                column=column_index,
+                value=child_labels.get(column_name, worksheet.cell(row=2, column=column_index).value),
+            )
+            if column_name in group_members:
+                continue
+            worksheet.cell(row=1, column=column_index, value=column_name)
+            worksheet.merge_cells(
+                start_row=1,
+                start_column=column_index,
+                end_row=2,
+                end_column=column_index,
+            )
+
+        for group_name, columns in grouped_columns.items():
+            positions = [
+                ordered_columns.index(column_name) + 1
+                for column_name in columns
+                if column_name in ordered_columns
+            ]
+            if not positions:
+                continue
+            start_column = min(positions)
+            end_column = max(positions)
+            worksheet.cell(row=1, column=start_column, value=group_labels.get(group_name, group_name))
+            if start_column != end_column:
+                worksheet.merge_cells(
+                    start_row=1,
+                    start_column=start_column,
+                    end_row=1,
+                    end_column=end_column,
+                )
 
     def scrape_hs_code(self, hs_code: str, input_index: Optional[int] = None):
         result = {
@@ -800,21 +1157,26 @@ class SATTariffScraper:
     def export_to_excel(self, output_file="sat_tariff_data.xlsx"):
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
             for section_label in SECTION_LABELS:
-                rows = []
-                for result in self.results:
-                    rows.extend(self._build_section_rows(result, section_label))
+                rows = self._build_sheet_rows(section_label)
                 df = pd.DataFrame(rows)
                 if df.empty:
-                    df = pd.DataFrame(columns=["HS_Code", "Status", "Overall_Status"])
-                ordered_columns = ["HS_Code", "Status", "Overall_Status"] + [
-                    column
-                    for column in df.columns
-                    if column not in {"HS_Code", "Status", "Overall_Status"}
-                ]
+                    df = pd.DataFrame(columns=list(self.BASE_EXPORT_COLUMNS))
+                ordered_columns = self._ordered_columns_for_section(
+                    section_label,
+                    df.to_dict("records"),
+                )
                 df = df.reindex(columns=ordered_columns)
                 sheet_name = self._safe_sheet_name(section_label)
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                self._format_worksheet(writer.sheets[sheet_name])
+                header_layout = self._build_header_layout(section_label, ordered_columns)
+                df.to_excel(
+                    writer,
+                    sheet_name=sheet_name,
+                    index=False,
+                    startrow=header_layout["header_rows"] - 1,
+                )
+                worksheet = writer.sheets[sheet_name]
+                self._apply_grouped_headers(worksheet, ordered_columns, header_layout)
+                self._format_worksheet(worksheet, header_rows=header_layout["header_rows"])
 
     def close_browser(self):
         if self.driver:

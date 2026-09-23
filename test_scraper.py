@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -37,6 +38,44 @@ class TestSATTariffScraper(unittest.TestCase):
                 else {}
             ),
         }
+
+    @staticmethod
+    def _header_rows_for_sheet(sheet):
+        coordinate = str(sheet.freeze_panes or "A2")
+        match = re.search(r"(\d+)$", coordinate)
+        return int(match.group(1)) - 1 if match else 1
+
+    @classmethod
+    def _data_start_row_for_sheet(cls, sheet):
+        return cls._header_rows_for_sheet(sheet) + 1
+
+    @staticmethod
+    def _merged_parent_value(sheet, row_index, column_index):
+        value = sheet.cell(row=row_index, column=column_index).value
+        if value is not None:
+            return value
+        for merged_range in sheet.merged_cells.ranges:
+            if (
+                merged_range.min_row <= row_index <= merged_range.max_row
+                and merged_range.min_col <= column_index <= merged_range.max_col
+            ):
+                return sheet.cell(merged_range.min_row, merged_range.min_col).value
+        return None
+
+    @classmethod
+    def _visible_headers(cls, sheet):
+        if cls._header_rows_for_sheet(sheet) == 1:
+            return [sheet.cell(row=1, column=index).value for index in range(1, sheet.max_column + 1)]
+
+        headers = []
+        for column_index in range(1, sheet.max_column + 1):
+            parent = cls._merged_parent_value(sheet, 1, column_index)
+            child = sheet.cell(row=2, column=column_index).value
+            if parent == "Unidades de medida" and child:
+                headers.append(f"Unidades de medida - {child}")
+            else:
+                headers.append(child or parent)
+        return headers
 
     def test_load_hs_codes_from_file_supports_arbitrary_counts_without_cap(self):
         for count in (0, 1, 19, 20, 25):
@@ -320,7 +359,7 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(len(scraper.results), 1)
         self.assertEqual(scraper.results[0]["Status"], "CAPTCHA solving failed")
 
-    def test_export_to_excel_creates_section_worksheets_with_status_columns(self):
+    def test_export_to_excel_creates_reference_layout_workbook(self):
         self.scraper.results = [
             {
                 "HS_Code": "0101210000",
@@ -330,19 +369,35 @@ class TestSATTariffScraper(unittest.TestCase):
                         SECTION_ROWS_KEY: [
                             {
                                 "Table_Name": "TRATAMIENTO GENERAL",
-                                "Código": "A1",
-                                "Descripción": "IVA",
+                                "Código": "DAI",
+                                "Descripción": "Derecho arancelario",
+                                "Código adicional": "AD1",
+                                "Valor": "5%",
+                                "Código de cuota": "CQ1",
+                            },
+                            {
+                                "Table_Name": "TRATAMIENTO GENERAL",
+                                "Código": "IVA",
+                                "Descripción": "Impuesto al valor agregado",
                                 "Código adicional": "AD1",
                                 "Valor": "12%",
                                 "Código de cuota": "CQ1",
                             },
                             {
-                                "Table_Name": "TLC Guatemala",
-                                "Código": "B2",
+                                "Table_Name": "TLC México",
+                                "Código": "DAI",
                                 "Descripción": "Preferencial",
-                                "Código adicional": "AD2",
+                                "Código adicional": "AD1",
                                 "Valor": "0%",
-                                "Código de cuota": "CQ2",
+                                "Código de cuota": "CQ1",
+                            },
+                            {
+                                "Table_Name": "TLC Chile",
+                                "Código": "DAI",
+                                "Descripción": "Preferencial",
+                                "Código adicional": "AD1",
+                                "Valor": "1%",
+                                "Código de cuota": "CQ1",
                             },
                         ]
                     },
@@ -357,6 +412,26 @@ class TestSATTariffScraper(unittest.TestCase):
                                 "Fecha fin de vigencia:": "2024-12-31",
                                 "Código": "0101",
                                 "Descripción": "Caballos",
+                                "Notas": "Vivo",
+                            },
+                            {
+                                "Table_Name": "Códigos adicionales",
+                                "Record_Type": "Códigos adicionales",
+                                "Sección": "Sección I",
+                                "Capítulo:": "Capítulo 01",
+                                "Fecha inicio de vigencia:": "2024-01-01",
+                                "Fecha fin de vigencia:": "2024-12-31",
+                                "Message": "No se han encontrado códigos adicionales asociados al inciso consultado",
+                            },
+                            {
+                                "Table_Name": "Unidades de medida",
+                                "Record_Type": "Unidades de medida",
+                                "Sección": "Sección I",
+                                "Capítulo:": "Capítulo 01",
+                                "Fecha inicio de vigencia:": "2024-01-01",
+                                "Fecha fin de vigencia:": "2024-12-31",
+                                "Código": "KGM",
+                                "Descripción": "Kilogramo",
                             }
                         ]
                     },
@@ -370,6 +445,15 @@ class TestSATTariffScraper(unittest.TestCase):
                                 "Valor": "Obligatoria",
                                 "Código de cuota": "CQR",
                             }
+                            ,
+                            {
+                                "Table_Name": "TRATAMIENTO GENERAL",
+                                "Código": "R1",
+                                "Descripción": "Licencia previa",
+                                "Código adicional": "AD3",
+                                "Valor": "Obligatoria",
+                                "Código de cuota": "CQR",
+                            },
                         ]
                     },
                     "Cuotas": {
@@ -395,23 +479,91 @@ class TestSATTariffScraper(unittest.TestCase):
             self.assertEqual(workbook.sheetnames, list(SECTION_LABELS))
 
             duties_sheet = workbook["Derechos e impuestos"]
-            self.assertEqual(duties_sheet["A2"].value, "0101210000")
-            self.assertEqual(duties_sheet["B2"].value, "Success")
+            self.assertEqual(
+                self._visible_headers(duties_sheet)[:9],
+                [
+                    "HS_Code",
+                    "Status",
+                    "Overall_Status",
+                    "DAI_GENERAL",
+                    "IVA_GENERAL",
+                    "DAI_MX",
+                    "DAI_CL",
+                    "Código adicional",
+                    "Código de cuota",
+                ],
+            )
+            self.assertIn("D1:E1", {str(cell_range) for cell_range in duties_sheet.merged_cells.ranges})
+            self.assertEqual(duties_sheet["D1"].value, "GENERAL")
+            self.assertEqual(duties_sheet["F1"].value, "MX")
+            self.assertEqual(duties_sheet["G1"].value, "CL")
             self.assertEqual(duties_sheet["A3"].value, "0101210000")
-            self.assertIn("Código de cuota", [cell.value for cell in duties_sheet[1]])
+            self.assertEqual(duties_sheet["D3"].value, "5%")
+            self.assertEqual(duties_sheet["E3"].value, "12%")
+            self.assertEqual(duties_sheet["F3"].value, "0%")
+            self.assertEqual(duties_sheet["G3"].value, "1%")
+            self.assertEqual(duties_sheet["H3"].value, "AD1")
+            self.assertEqual(duties_sheet["I3"].value, "CQ1")
 
             nomenclature_sheet = workbook["Nomenclatura"]
-            self.assertEqual(nomenclature_sheet["A2"].value, "0101210000")
-            self.assertIn("Sección", [cell.value for cell in nomenclature_sheet[1]])
+            self.assertEqual(
+                self._visible_headers(nomenclature_sheet)[:10],
+                [
+                    "HS_Code",
+                    "Status",
+                    "Overall_Status",
+                    "Sección",
+                    "Capítulo:",
+                    "Fecha inicio de vigencia:",
+                    "Fecha fin de vigencia:",
+                    "Códigos adicionales",
+                    "Unidades de medida - Código",
+                    "Unidades de medida - Descripción",
+                ],
+            )
+            self.assertIn("I1:J1", {str(cell_range) for cell_range in nomenclature_sheet.merged_cells.ranges})
+            self.assertEqual(nomenclature_sheet["I1"].value, "Unidades de medida")
+            self.assertEqual(nomenclature_sheet["I2"].value, "Código")
+            self.assertEqual(nomenclature_sheet["J2"].value, "Descripción")
+            self.assertEqual(nomenclature_sheet["A3"].value, "0101210000")
+            self.assertEqual(nomenclature_sheet["H4"].value, "No se han encontrado códigos adicionales asociados al inciso consultado")
+            self.assertEqual(nomenclature_sheet["I5"].value, "KGM")
+            self.assertEqual(nomenclature_sheet["J5"].value, "Kilogramo")
 
             restrictions_sheet = workbook["Restricciones"]
+            self.assertEqual(
+                self._visible_headers(restrictions_sheet)[:8],
+                [
+                    "HS_Code",
+                    "Status",
+                    "Overall_Status",
+                    "Código",
+                    "Descripción",
+                    "Código adicional",
+                    "Valor",
+                    "Código de cuota",
+                ],
+            )
             self.assertEqual(restrictions_sheet["A2"].value, "0101210000")
-            self.assertIn("Código de cuota", [cell.value for cell in restrictions_sheet[1]])
+            self.assertEqual(restrictions_sheet["H2"].value, "CQR")
+            self.assertEqual(restrictions_sheet["A3"].value, "0101210000")
+            self.assertEqual(restrictions_sheet["H3"].value, "CQR")
 
             quotas_sheet = workbook["Cuotas"]
             self.assertEqual(quotas_sheet["A2"].value, "0101210000")
             self.assertEqual(quotas_sheet["B2"].value, "Success")
-            self.assertIn("Message", [cell.value for cell in quotas_sheet[1]])
+            self.assertEqual(self._visible_headers(quotas_sheet)[:4], ["HS_Code", "Status", "Overall_Status", "Resultado"])
+            self.assertEqual(
+                quotas_sheet["D2"].value,
+                "Resultados de la búsqueda: No se han encontrado cuotas/contingentes para el inciso consultado",
+            )
+            self.assertEqual(duties_sheet.freeze_panes, "A3")
+            self.assertEqual(nomenclature_sheet.freeze_panes, "A3")
+            self.assertEqual(restrictions_sheet.freeze_panes, "A2")
+            self.assertEqual(quotas_sheet.freeze_panes, "A2")
+            self.assertEqual(duties_sheet["A1"].fill.fgColor.rgb[-6:], "4472C4")
+            self.assertTrue(duties_sheet["A1"].font.bold)
+            self.assertEqual(duties_sheet["A1"].font.color.rgb[-6:], "FFFFFF")
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)
@@ -435,9 +587,10 @@ class TestSATTariffScraper(unittest.TestCase):
 
             for section_label in SECTION_LABELS:
                 sheet = workbook[section_label]
-                self.assertEqual(sheet["A2"].value, "0101210000")
-                self.assertEqual(sheet["B2"].value, "Failed to submit HS code")
-                self.assertEqual(sheet["C2"].value, "Failed to submit HS code")
+                data_row = self._data_start_row_for_sheet(sheet)
+                self.assertEqual(sheet.cell(row=data_row, column=1).value, "0101210000")
+                self.assertEqual(sheet.cell(row=data_row, column=2).value, "Failed to submit HS code")
+                self.assertEqual(sheet.cell(row=data_row, column=3).value, "Failed to submit HS code")
         finally:
             if os.path.exists(output_file):
                 os.remove(output_file)
@@ -490,8 +643,9 @@ class TestSATTariffScraper(unittest.TestCase):
             self.assertEqual(workbook.sheetnames, list(SECTION_LABELS))
             for section_label in SECTION_LABELS:
                 sheet = workbook[section_label]
+                start_row = self._data_start_row_for_sheet(sheet)
                 self.assertEqual(
-                    [sheet[f"A{row}"].value for row in range(2, 5)],
+                    [sheet.cell(row=row, column=1).value for row in range(start_row, start_row + 3)],
                     ["0101210000", "0102210000", "0103210000"],
                 )
         finally:
