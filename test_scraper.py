@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 
@@ -291,6 +292,8 @@ class TestSATTariffScraper(unittest.TestCase):
             "No se han encontrado cuotas/contingentes para el inciso consultado"
         )
         self.assertEqual(self.scraper._format_quota_message(prefixed), prefixed)
+        decomposed = unicodedata.normalize("NFD", prefixed)
+        self.assertEqual(self.scraper._format_quota_message(decomposed), decomposed)
 
     def test_scrape_hs_code_reflects_non_success_section_status(self):
         expected_data = {

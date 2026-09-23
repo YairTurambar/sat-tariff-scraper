@@ -695,9 +695,12 @@ class SATTariffScraper:
     def _format_quota_message(message: str) -> str:
         if not message:
             return ""
-        if message.startswith("Resultados de la búsqueda:"):
+        prefix = "Resultados de la búsqueda:"
+        normalized_message = unicodedata.normalize("NFKC", message).casefold()
+        normalized_prefix = unicodedata.normalize("NFKC", prefix).casefold()
+        if normalized_message.startswith(normalized_prefix):
             return message
-        return f"Resultados de la búsqueda: {message}"
+        return f"{prefix} {message}"
 
     def _build_duties_sheet_rows(self, result: Dict) -> List[Dict]:
         base_row = self._base_export_row(result, "Derechos e impuestos")
