@@ -830,34 +830,41 @@ class SATTariffScraper:
                 ],
                 key=self._duty_sort_key,
             )
-            return list(self.BASE_EXPORT_COLUMNS) + duty_columns + [
+            trailing_columns = [
                 column
                 for column in self.DUTY_TRAILING_COLUMNS
-                if column in seen_columns or column in {"Código adicional", "Código de cuota"}
-            ] + [
+                if column in seen_columns
+            ]
+            return list(self.BASE_EXPORT_COLUMNS) + duty_columns + trailing_columns + [
                 column
                 for column in seen_columns
                 if column
                 not in set(
                     list(self.BASE_EXPORT_COLUMNS)
                     + duty_columns
-                    + list(self.DUTY_TRAILING_COLUMNS)
+                    + trailing_columns
                 )
             ]
 
         if section_label == "Nomenclatura":
-            required_columns = list(self.BASE_EXPORT_COLUMNS) + list(self.NOMENCLATURE_REQUIRED_COLUMNS)
+            required_columns = list(self.BASE_EXPORT_COLUMNS) + [
+                column for column in self.NOMENCLATURE_REQUIRED_COLUMNS if column in seen_columns
+            ]
             return required_columns + [
                 column for column in seen_columns if column not in required_columns
             ]
 
         if section_label == "Restricciones":
-            required_columns = list(self.BASE_EXPORT_COLUMNS) + list(self.STANDARD_SECTION_COLUMNS)
+            required_columns = list(self.BASE_EXPORT_COLUMNS) + [
+                column for column in self.STANDARD_SECTION_COLUMNS if column in seen_columns
+            ]
             return required_columns + [
                 column for column in seen_columns if column not in required_columns
             ]
 
-        required_columns = list(self.BASE_EXPORT_COLUMNS) + ["Resultado"]
+        required_columns = list(self.BASE_EXPORT_COLUMNS) + [
+            column for column in ("Resultado",) if column in seen_columns
+        ]
         return required_columns + [column for column in seen_columns if column not in required_columns]
 
     @classmethod
