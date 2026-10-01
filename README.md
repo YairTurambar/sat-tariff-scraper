@@ -21,7 +21,7 @@ Each worksheet contains:
   - `Derechos e impuestos`: agreement/treatment duty columns such as `DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, `DAI_CL`, etc., followed by `Código adicional` and `Código de cuota`
   - `Nomenclatura`: leading scalar columns plus the grouped `Unidades de medida` header with child columns `Código` and `Descripción`
   - `Restricciones`: ordered columns `Código`, `Descripción`, `Código adicional`, `Valor`, `Código de cuota`
-  - `Cuotas`: a dedicated `Resultado` column containing the SAT message/result text
+  - `Cuotas`: a dedicated, merged `TRATAMIENTO GENERAL` column spanning the header rows and containing the SAT message/result text
 
 If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code`, `Status`, and `Overall_Status`.
 
@@ -29,7 +29,8 @@ If a section has no data or cannot be extracted for a code, the worksheet is sti
 
 - `Derechos e impuestos` is exported with agreement-specific duty columns per HS row so that each treatment remains in its own column instead of a generic row blob
 - `Restricciones` is exported as one row per source restriction row, preserving duplicates and keeping `Código`, `Descripción`, `Código adicional`, `Valor`, and `Código de cuota` in that order
-- `Cuotas` writes the SAT portal result text to `Resultado`, including the empty-state wording when no quota exists, while preserving raw extracted fields after the required columns
+- `Cuotas` writes the SAT portal result text to the merged `TRATAMIENTO GENERAL` column, including the `Resultados de la búsqueda: ` prefix and empty-state wording when no quota exists, while preserving raw extracted fields after the required columns
+- `Derechos e impuestos` maps each agreement table to a `DAI_<SUFFIX>`/`IVA_<SUFFIX>`-style column using a data-driven suffix: the general schedule becomes `GENERAL`, an explicit trailing code on the agreement name (for example "... – MX") is used verbatim, and agreements without an explicit code fall back to a sanitized slug of their name
 - `Nomenclatura` is exported as one row per named table/content block, preserving the scalar fields:
   - `Sección`
   - `Capítulo:`

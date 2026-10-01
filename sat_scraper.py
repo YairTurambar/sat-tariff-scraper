@@ -64,19 +64,7 @@ class SATTariffScraper:
     )
     DUTY_TRAILING_COLUMNS = ("Código adicional", "Código de cuota")
     DUTY_GROUP_ORDER = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
-    DUTY_GROUP_ALIASES = {
-        "GENERAL": ("GENERAL",),
-        "MX": ("MEXICO",),
-        "CL": ("CHILE",),
-        "ADAE": ("ADAE",),
-        "CO": ("COLOMBIA",),
-        "UK": ("REINO UNIDO", "UNITED KINGDOM"),
-        "US": ("ESTADOS UNIDOS", "UNITED STATES"),
-        "PE": ("PERU",),
-        "TW": ("TAIWAN",),
-        "DO": ("DOMINICANA",),
-        "CU": ("CUBA",),
-    }
+    QUOTAS_RESULT_COLUMN = "TRATAMIENTO GENERAL"
     NOMENCLATURE_BLOCK_LABELS = (
         "Código de Mercancías",
         "Códigos adicionales",
@@ -125,6 +113,7 @@ class SATTariffScraper:
         self.delay_between_codes = max(0, delay_between_codes)
         self.max_retries = max(0, max_retries)
         self.retry_backoff = max(0, retry_backoff)
+        self._duty_value_columns: set = set()
 
     def start_browser(self):
         options = webdriver.ChromeOptions()
@@ -659,13 +648,31 @@ class SATTariffScraper:
         normalized = unicodedata.normalize("NFKD", text or "")
         return normalized.encode("ascii", "ignore").decode("ascii").upper()
 
+    _AGREEMENT_SUFFIX_PATTERN = re.compile(r"[-\u2013\u2014]\s*([A-Za-z]{2,6})\s*$")
+
     @classmethod
     def _agreement_suffix(cls, table_name: str) -> str:
-        normalized = cls._ascii_upper(table_name)
-        for suffix, aliases in cls.DUTY_GROUP_ALIASES.items():
-            if any(alias in normalized for alias in aliases):
+        """Derive a short, stable column suffix for a duty/tax table name.
+
+        This is data-driven rather than a hardcoded enum of agreements:
+        1. The general schedule is always mapped to ``GENERAL``.
+        2. If the agreement name carries an explicit trailing code (the SAT
+           convention is ``<agreement name> - XX`` or ``<agreement name> – XX``),
+           that code is used verbatim, e.g. "... - MX" -> "MX".
+        3. Otherwise, fall back to a sanitized slug of the full agreement name
+           so new agreements are still represented without code changes.
+        """
+        if not table_name:
+            return "OTRO"
+        if cls._ascii_upper(table_name).strip() == "TRATAMIENTO GENERAL":
+            return "GENERAL"
+        match = cls._AGREEMENT_SUFFIX_PATTERN.search(table_name)
+        if match:
+            suffix = re.sub(r"[^A-Z0-9]", "", cls._ascii_upper(match.group(1)))
+            if suffix:
                 return suffix
-        return "OTRO"
+        slug = re.sub(r"[^A-Z0-9]+", "_", cls._ascii_upper(table_name)).strip("_")
+        return slug or "OTRO"
 
     @classmethod
     def _duty_column_name(cls, row: Dict) -> str:
@@ -685,11 +692,8 @@ class SATTariffScraper:
         )
         return (suffix_index, suffix, prefix, column_name)
 
-    @classmethod
-    def _is_duty_value_column(cls, column_name: str) -> bool:
-        if "_" not in column_name:
-            return False
-        return column_name.rsplit("_", 1)[1] in set(cls.DUTY_GROUP_ORDER + ("OTRO",))
+    def _is_duty_value_column(self, column_name: str) -> bool:
+        return column_name in self._duty_value_columns
 
     @staticmethod
     def _format_quota_message(message: str) -> str:
@@ -726,6 +730,7 @@ class SATTariffScraper:
             export_column = self._duty_column_name(section_row)
 
             if export_column:
+                self._duty_value_columns.add(export_column)
                 existing_value = target_row.get(export_column, "")
                 new_value = section_row.get("Valor", "")
                 if existing_value and new_value:
@@ -791,9 +796,9 @@ class SATTariffScraper:
             export_row = {**base_row, **section_row}
             message = section_row.get("Message")
             if message:
-                export_row["Resultado"] = self._format_quota_message(message)
+                export_row[self.QUOTAS_RESULT_COLUMN] = self._format_quota_message(message)
             else:
-                export_row["Resultado"] = "; ".join(
+                export_row[self.QUOTAS_RESULT_COLUMN] = "; ".join(
                     f"{column}: {section_row[column]}"
                     for column in self.STANDARD_SECTION_COLUMNS
                     if section_row.get(column)
@@ -802,6 +807,8 @@ class SATTariffScraper:
         return rows
 
     def _build_sheet_rows(self, section_label: str) -> List[Dict]:
+        if section_label == "Derechos e impuestos":
+            self._duty_value_columns = set()
         builders = {
             "Derechos e impuestos": self._build_duties_sheet_rows,
             "Nomenclatura": self._build_nomenclature_sheet_rows,
@@ -864,17 +871,16 @@ class SATTariffScraper:
             ]
 
         required_columns = list(self.BASE_EXPORT_COLUMNS) + [
-            column for column in ("Resultado",) if column in seen_columns
+            column for column in (self.QUOTAS_RESULT_COLUMN,) if column in seen_columns
         ]
         return required_columns + [column for column in seen_columns if column not in required_columns]
 
-    @classmethod
-    def _build_header_layout(cls, section_label: str, ordered_columns: List[str]) -> Dict:
+    def _build_header_layout(self, section_label: str, ordered_columns: List[str]) -> Dict:
         if section_label == "Derechos e impuestos":
             grouped_columns = defaultdict(list)
             pivot_columns = []
             for column in ordered_columns:
-                if not cls._is_duty_value_column(column):
+                if not self._is_duty_value_column(column):
                     continue
                 pivot_columns.append(column)
                 grouped_columns[column.rsplit("_", 1)[1]].append(column)
@@ -902,6 +908,14 @@ class SATTariffScraper:
                     "Unidades de medida - Código": "Código",
                     "Unidades de medida - Descripción": "Descripción",
                 },
+            }
+
+        if section_label == "Cuotas" and self.QUOTAS_RESULT_COLUMN in ordered_columns:
+            return {
+                "header_rows": 2,
+                "grouped_columns": {},
+                "group_display_labels": {},
+                "child_header_labels": {},
             }
 
         return {

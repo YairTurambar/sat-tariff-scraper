@@ -297,6 +297,31 @@ class TestSATTariffScraper(unittest.TestCase):
         spaced = f"\n  {prefixed}"
         self.assertEqual(self.scraper._format_quota_message(spaced), spaced)
 
+    def test_agreement_suffix_maps_general_treatment(self):
+        self.assertEqual(
+            SATTariffScraper._agreement_suffix("TRATAMIENTO GENERAL"),
+            "GENERAL",
+        )
+
+    def test_agreement_suffix_derives_explicit_trailing_code(self):
+        mexico_agreement = (
+            "Tratado de Libre Comercio Entre Los Estados Unidos Mexicanos y las "
+            "Repúblicas de Costa Rica, El Salvador, Guatemala, Honduras y Nicaragua – MX"
+        )
+        self.assertEqual(SATTariffScraper._agreement_suffix(mexico_agreement), "MX")
+
+        chile_agreement = (
+            "Tratado de Libre Comercio Entre la República de Chile y las "
+            "Repúblicas de Centroamérica - CL"
+        )
+        self.assertEqual(SATTariffScraper._agreement_suffix(chile_agreement), "CL")
+
+    def test_agreement_suffix_falls_back_to_sanitized_slug(self):
+        agreement_without_code = "Convenio Centroamericano de Incentivos Fiscales"
+        suffix = SATTariffScraper._agreement_suffix(agreement_without_code)
+        self.assertEqual(suffix, "CONVENIO_CENTROAMERICANO_DE_INCENTIVOS_FISCALES")
+        self.assertEqual(SATTariffScraper._agreement_suffix(""), "OTRO")
+
     def test_scrape_hs_code_reflects_non_success_section_status(self):
         expected_data = {
             "Derechos e impuestos": {SECTION_ROWS_KEY: [{"Table_Name": "TRATAMIENTO GENERAL"}]},
@@ -396,7 +421,7 @@ class TestSATTariffScraper(unittest.TestCase):
                                 "Código de cuota": "CQ1",
                             },
                             {
-                                "Table_Name": "TLC México",
+                                "Table_Name": "TLC México - MX",
                                 "Código": "DAI",
                                 "Descripción": "Preferencial",
                                 "Código adicional": "AD1",
@@ -404,7 +429,7 @@ class TestSATTariffScraper(unittest.TestCase):
                                 "Código de cuota": "CQ1",
                             },
                             {
-                                "Table_Name": "TLC Chile",
+                                "Table_Name": "TLC Chile - CL",
                                 "Código": "DAI",
                                 "Descripción": "Preferencial",
                                 "Código adicional": "AD1",
@@ -562,17 +587,21 @@ class TestSATTariffScraper(unittest.TestCase):
             self.assertEqual(restrictions_sheet["H3"].value, "CQR")
 
             quotas_sheet = workbook["Cuotas"]
-            self.assertEqual(quotas_sheet["A2"].value, "0101210000")
-            self.assertEqual(quotas_sheet["B2"].value, "Success")
-            self.assertEqual(self._visible_headers(quotas_sheet)[:4], ["HS_Code", "Status", "Overall_Status", "Resultado"])
+            self.assertEqual(quotas_sheet["A3"].value, "0101210000")
+            self.assertEqual(quotas_sheet["B3"].value, "Success")
             self.assertEqual(
-                quotas_sheet["D2"].value,
+                self._visible_headers(quotas_sheet)[:4],
+                ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"],
+            )
+            self.assertIn("D1:D2", {str(cell_range) for cell_range in quotas_sheet.merged_cells.ranges})
+            self.assertEqual(
+                quotas_sheet["D3"].value,
                 "Resultados de la búsqueda: No se han encontrado cuotas/contingentes para el inciso consultado",
             )
             self.assertEqual(duties_sheet.freeze_panes, "A3")
             self.assertEqual(nomenclature_sheet.freeze_panes, "A3")
             self.assertEqual(restrictions_sheet.freeze_panes, "A2")
-            self.assertEqual(quotas_sheet.freeze_panes, "A2")
+            self.assertEqual(quotas_sheet.freeze_panes, "A3")
             self.assertEqual(duties_sheet["A1"].fill.fgColor.rgb[-6:], "4472C4")
             self.assertTrue(duties_sheet["A1"].font.bold)
             self.assertEqual(duties_sheet["A1"].font.color.rgb[-6:], "FFFFFF")
