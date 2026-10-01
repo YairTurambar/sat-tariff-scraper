@@ -62,6 +62,7 @@ class SATTariffScraper:
         "Valor",
         "Código de cuota",
     )
+    DUTY_LEADING_COLUMNS = ("Código",)
     DUTY_TRAILING_COLUMNS = ("Código adicional", "Código de cuota")
     DUTY_GROUP_ORDER = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
     QUOTAS_RESULT_COLUMN = "TRATAMIENTO GENERAL"
@@ -87,6 +88,22 @@ class SATTariffScraper:
         "Códigos adicionales",
         "Unidades de medida - Código",
         "Unidades de medida - Descripción",
+    )
+    NOMENCLATURE_UNIT_COLUMNS = (
+        "Unidades de medida - Código",
+        "Unidades de medida - Descripción",
+    )
+    #: Columns that must never reach the exported workbook, no matter what the
+    #: parsing layer kept internally.
+    FORBIDDEN_EXPORT_COLUMNS = frozenset(
+        {
+            "Table_Name",
+            "Record_Type",
+            "Message",
+            "Resultado",
+            "Content",
+            INPUT_INDEX_KEY,
+        }
     )
 
     def __init__(
@@ -114,6 +131,7 @@ class SATTariffScraper:
         self.max_retries = max(0, max_retries)
         self.retry_backoff = max(0, retry_backoff)
         self._duty_value_columns: set = set()
+        self._duty_column_suffixes: Dict[str, str] = {}
 
     def start_browser(self):
         options = webdriver.ChromeOptions()
@@ -675,20 +693,29 @@ class SATTariffScraper:
         return slug or "OTRO"
 
     @classmethod
-    def _duty_column_name(cls, row: Dict) -> str:
+    def _duty_column_parts(cls, row: Dict):
+        """Return the ``(code, agreement suffix)`` pair backing a duty column."""
         code = re.sub(r"[^A-Z0-9]+", "_", cls._ascii_upper(row.get("Código", ""))).strip("_")
         suffix = cls._agreement_suffix(row.get("Table_Name", ""))
+        return code, suffix
+
+    @classmethod
+    def _duty_column_name(cls, row: Dict) -> str:
+        code, suffix = cls._duty_column_parts(row)
         if not code:
             return ""
         return f"{code}_{suffix}"
 
-    @classmethod
-    def _duty_sort_key(cls, column_name: str):
-        prefix, _, suffix = column_name.partition("_")
+    def _duty_agreement_suffix_for_column(self, column_name: str) -> str:
+        return self._duty_column_suffixes.get(column_name, column_name.partition("_")[2])
+
+    def _duty_sort_key(self, column_name: str):
+        suffix = self._duty_agreement_suffix_for_column(column_name)
+        prefix = column_name[: len(column_name) - len(suffix) - 1] if suffix else column_name
         suffix_index = (
-            cls.DUTY_GROUP_ORDER.index(suffix)
-            if suffix in cls.DUTY_GROUP_ORDER
-            else len(cls.DUTY_GROUP_ORDER)
+            self.DUTY_GROUP_ORDER.index(suffix)
+            if suffix in self.DUTY_GROUP_ORDER
+            else len(self.DUTY_GROUP_ORDER)
         )
         return (suffix_index, suffix, prefix, column_name)
 
@@ -697,14 +724,13 @@ class SATTariffScraper:
 
     @staticmethod
     def _format_quota_message(message: str) -> str:
-        if not message:
-            return ""
-        prefix = "Resultados de la búsqueda:"
-        normalized_message = SATTariffScraper._ascii_upper(message.lstrip())
-        normalized_prefix = SATTariffScraper._ascii_upper(prefix)
-        if normalized_message.startswith(normalized_prefix):
-            return message
-        return f"{prefix} {message}"
+        """Return the quota message exactly as displayed by the website.
+
+        The SAT portal sometimes renders the informational message with a
+        ``Resultados de la búsqueda: `` prefix. That displayed text is preserved
+        verbatim, but the prefix is never invented nor duplicated.
+        """
+        return message or ""
 
     def _build_duties_sheet_rows(self, result: Dict) -> List[Dict]:
         base_row = self._base_export_row(result, "Derechos e impuestos")
@@ -723,6 +749,7 @@ class SATTariffScraper:
                 ordered_keys.append(key)
                 grouped_rows[key] = {
                     **base_row,
+                    "Código": "",
                     "Código adicional": key[0],
                     "Código de cuota": key[1],
                 }
@@ -731,28 +758,22 @@ class SATTariffScraper:
 
             if export_column:
                 self._duty_value_columns.add(export_column)
+                self._duty_column_suffixes[export_column] = self._duty_column_parts(section_row)[1]
                 existing_value = target_row.get(export_column, "")
                 new_value = section_row.get("Valor", "")
                 if existing_value and new_value:
                     target_row[export_column] = f"{existing_value}\n{new_value}"
                 elif new_value:
                     target_row[export_column] = new_value
-            table_name = section_row.get("Table_Name", "")
-            if table_name:
-                existing_table_names = target_row.get("Table_Name", "")
-                if table_name not in existing_table_names.split(" | "):
-                    target_row["Table_Name"] = (
-                        f"{existing_table_names} | {table_name}".strip(" | ")
-                        if existing_table_names
-                        else table_name
-                    )
 
-            for key_name, value in section_row.items():
-                if key_name in {"Table_Name", "Código", "Descripción", "Valor"}:
-                    continue
-                if key_name in target_row and target_row[key_name] not in {"", value}:
-                    continue
-                target_row[key_name] = value
+            source_code = section_row.get("Código", "")
+            if source_code:
+                existing_codes = [
+                    code for code in target_row["Código"].split(" | ") if code
+                ]
+                if source_code not in existing_codes:
+                    existing_codes.append(source_code)
+                target_row["Código"] = " | ".join(existing_codes)
 
         return [grouped_rows[key] for key in ordered_keys]
 
@@ -762,25 +783,43 @@ class SATTariffScraper:
         if not section_rows:
             return [base_row]
 
-        rows = []
+        scalar_values = {column: "" for column in self.NOMENCLATURE_SCALAR_COLUMNS}
+        additional_codes = ""
+        unit_records = []
         for section_row in section_rows:
-            export_row = {**base_row, **section_row}
-            export_row.setdefault("Códigos adicionales", "")
-            export_row.setdefault("Unidades de medida - Código", "")
-            export_row.setdefault("Unidades de medida - Descripción", "")
+            for column in self.NOMENCLATURE_SCALAR_COLUMNS:
+                if not scalar_values[column] and section_row.get(column):
+                    scalar_values[column] = section_row[column]
 
-            if section_row.get("Record_Type") == "Códigos adicionales":
-                export_row["Códigos adicionales"] = (
+            record_type = section_row.get("Record_Type")
+            if record_type == "Códigos adicionales" and not additional_codes:
+                additional_codes = (
                     section_row.get("Message")
                     or section_row.get("Content")
                     or section_row.get("Descripción")
                     or section_row.get("Código", "")
                 )
-            if section_row.get("Record_Type") == "Unidades de medida":
-                export_row["Unidades de medida - Código"] = section_row.get("Código", "")
-                export_row["Unidades de medida - Descripción"] = section_row.get("Descripción", "")
-            rows.append(export_row)
-        return rows
+            if record_type == "Unidades de medida":
+                unit_records.append(
+                    (section_row.get("Código", ""), section_row.get("Descripción", ""))
+                )
+
+        shared_row = {
+            **base_row,
+            **scalar_values,
+            "Códigos adicionales": additional_codes,
+        }
+        if not unit_records:
+            return [{**shared_row, **{column: "" for column in self.NOMENCLATURE_UNIT_COLUMNS}}]
+
+        return [
+            {
+                **shared_row,
+                "Unidades de medida - Código": unit_code,
+                "Unidades de medida - Descripción": unit_description,
+            }
+            for unit_code, unit_description in unit_records
+        ]
 
     def _build_restrictions_sheet_rows(self, result: Dict) -> List[Dict]:
         return self._build_section_rows(result, "Restricciones")
@@ -788,27 +827,19 @@ class SATTariffScraper:
     def _build_quotas_sheet_rows(self, result: Dict) -> List[Dict]:
         base_row = self._base_export_row(result, "Cuotas")
         section_rows = result.get("Sections", {}).get("Cuotas", {}).get(SECTION_ROWS_KEY, [])
-        if not section_rows:
-            return [base_row]
 
-        rows = []
+        message = ""
         for section_row in section_rows:
-            export_row = {**base_row, **section_row}
-            message = section_row.get("Message")
-            if message:
-                export_row[self.QUOTAS_RESULT_COLUMN] = self._format_quota_message(message)
-            else:
-                export_row[self.QUOTAS_RESULT_COLUMN] = "; ".join(
-                    f"{column}: {section_row[column]}"
-                    for column in self.STANDARD_SECTION_COLUMNS
-                    if section_row.get(column)
-                )
-            rows.append(export_row)
-        return rows
+            if section_row.get("Message"):
+                message = section_row["Message"]
+                break
+
+        return [{**base_row, self.QUOTAS_RESULT_COLUMN: self._format_quota_message(message)}]
 
     def _build_sheet_rows(self, section_label: str) -> List[Dict]:
         if section_label == "Derechos e impuestos":
             self._duty_value_columns = set()
+            self._duty_column_suffixes = {}
         builders = {
             "Derechos e impuestos": self._build_duties_sheet_rows,
             "Nomenclatura": self._build_nomenclature_sheet_rows,
@@ -821,71 +852,48 @@ class SATTariffScraper:
         return rows
 
     def _ordered_columns_for_section(self, section_label: str, rows: List[Dict]) -> List[str]:
-        seen_columns = []
-        seen_column_set = set()
-        for row in rows:
-            for column in row:
-                if column not in seen_column_set:
-                    seen_columns.append(column)
-                    seen_column_set.add(column)
+        """Return the strict, deterministic column whitelist for a worksheet.
 
+        Only the columns required by the reference layouts are returned; helper
+        or metadata columns kept during parsing are never exposed.
+        """
         if section_label == "Derechos e impuestos":
-            duty_columns = sorted(
-                [
-                    column
-                    for column in seen_columns
-                    if self._is_duty_value_column(column)
-                ],
-                key=self._duty_sort_key,
+            duty_columns = sorted(self._duty_value_columns, key=self._duty_sort_key)
+            return (
+                list(self.BASE_EXPORT_COLUMNS)
+                + list(self.DUTY_LEADING_COLUMNS)
+                + duty_columns
+                + list(self.DUTY_TRAILING_COLUMNS)
             )
-            trailing_columns = [
-                column
-                for column in self.DUTY_TRAILING_COLUMNS
-                if column in seen_columns
-            ]
-            return list(self.BASE_EXPORT_COLUMNS) + duty_columns + trailing_columns + [
-                column
-                for column in seen_columns
-                if column
-                not in set(
-                    list(self.BASE_EXPORT_COLUMNS)
-                    + duty_columns
-                    + trailing_columns
-                )
-            ]
 
         if section_label == "Nomenclatura":
-            required_columns = list(self.BASE_EXPORT_COLUMNS) + [
-                column for column in self.NOMENCLATURE_REQUIRED_COLUMNS if column in seen_columns
-            ]
-            return required_columns + [
-                column for column in seen_columns if column not in required_columns
-            ]
+            return list(self.BASE_EXPORT_COLUMNS) + list(self.NOMENCLATURE_REQUIRED_COLUMNS)
 
         if section_label == "Restricciones":
-            required_columns = list(self.BASE_EXPORT_COLUMNS) + [
-                column for column in self.STANDARD_SECTION_COLUMNS if column in seen_columns
-            ]
-            return required_columns + [
-                column for column in seen_columns if column not in required_columns
-            ]
+            return list(self.BASE_EXPORT_COLUMNS) + list(self.STANDARD_SECTION_COLUMNS)
 
-        required_columns = list(self.BASE_EXPORT_COLUMNS) + [
-            column for column in (self.QUOTAS_RESULT_COLUMN,) if column in seen_columns
+        return list(self.BASE_EXPORT_COLUMNS) + [self.QUOTAS_RESULT_COLUMN]
+
+    @classmethod
+    def _project_rows(cls, rows: List[Dict], ordered_columns: List[str]) -> List[Dict]:
+        """Drop every value that is not part of the worksheet whitelist."""
+        forbidden = cls.FORBIDDEN_EXPORT_COLUMNS.intersection(ordered_columns)
+        if forbidden:
+            raise ValueError(f"Forbidden export columns requested: {sorted(forbidden)}")
+        return [
+            {column: row.get(column, "") for column in ordered_columns}
+            for row in rows
         ]
-        return required_columns + [column for column in seen_columns if column not in required_columns]
 
     def _build_header_layout(self, section_label: str, ordered_columns: List[str]) -> Dict:
         if section_label == "Derechos e impuestos":
             grouped_columns = defaultdict(list)
-            pivot_columns = []
             for column in ordered_columns:
                 if not self._is_duty_value_column(column):
                     continue
-                pivot_columns.append(column)
-                grouped_columns[column.rsplit("_", 1)[1]].append(column)
+                grouped_columns[self._duty_agreement_suffix_for_column(column)].append(column)
             return {
-                "header_rows": 2 if pivot_columns else 1,
+                "header_rows": 2,
                 "grouped_columns": dict(grouped_columns),
                 "group_display_labels": {},
                 "child_header_labels": {},
@@ -894,14 +902,11 @@ class SATTariffScraper:
         if section_label == "Nomenclatura":
             unit_columns = [
                 column_name
-                for column_name in (
-                    "Unidades de medida - Código",
-                    "Unidades de medida - Descripción",
-                )
+                for column_name in self.NOMENCLATURE_UNIT_COLUMNS
                 if column_name in ordered_columns
             ]
             return {
-                "header_rows": 2 if unit_columns else 1,
+                "header_rows": 2,
                 "grouped_columns": {"Unidades de medida": unit_columns} if unit_columns else {},
                 "group_display_labels": {},
                 "child_header_labels": {
@@ -910,7 +915,7 @@ class SATTariffScraper:
                 },
             }
 
-        if section_label == "Cuotas" and self.QUOTAS_RESULT_COLUMN in ordered_columns:
+        if section_label == "Cuotas":
             return {
                 "header_rows": 2,
                 "grouped_columns": {},
@@ -1188,14 +1193,11 @@ class SATTariffScraper:
         with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
             for section_label in SECTION_LABELS:
                 rows = self._build_sheet_rows(section_label)
-                df = pd.DataFrame(rows)
-                if df.empty:
-                    df = pd.DataFrame(columns=list(self.BASE_EXPORT_COLUMNS))
-                ordered_columns = self._ordered_columns_for_section(
-                    section_label,
-                    df.to_dict("records"),
+                ordered_columns = self._ordered_columns_for_section(section_label, rows)
+                df = pd.DataFrame(
+                    self._project_rows(rows, ordered_columns),
+                    columns=ordered_columns,
                 )
-                df = df.reindex(columns=ordered_columns)
                 sheet_name = self._safe_sheet_name(section_label)
                 header_layout = self._build_header_layout(section_label, ordered_columns)
                 df.to_excel(

@@ -11,32 +11,39 @@ The generated Excel file keeps SAT data in four separate worksheets:
 - `Restricciones`
 - `Cuotas`
 
-Each worksheet contains:
+Each worksheet uses a **strict column whitelist**: only the columns listed below are written, and
+helper/metadata fields such as `Table_Name`, `Record_Type`, `Message`, or `Resultado` are never
+exported, even though they are still used internally while parsing.
 
-- `HS_Code`
-- `Status`
-- `Overall_Status`
-- normalized, section-specific extracted fields for that SAT section
-- grouped blue headers in the generated workbook where SAT presents grouped data, including:
-  - `Derechos e impuestos`: agreement/treatment duty columns such as `DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, `DAI_CL`, etc., followed by `Código adicional` and `Código de cuota`
-  - `Nomenclatura`: leading scalar columns plus the grouped `Unidades de medida` header with child columns `Código` and `Descripción`
-  - `Restricciones`: ordered columns `Código`, `Descripción`, `Código adicional`, `Valor`, `Código de cuota`
-  - `Cuotas`: a dedicated, merged `TRATAMIENTO GENERAL` column spanning the header rows and containing the SAT message/result text
+- `Derechos e impuestos`: `HS_Code`, `Status`, `Overall_Status`, `Código`, the agreement duty columns
+  (`DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, `DAI_CL`, …) grouped under a merged agreement header, then
+  `Código adicional` and `Código de cuota`
+- `Nomenclatura`: `HS_Code`, `Status`, `Overall_Status`, `Sección`, `Capítulo:`,
+  `Fecha inicio de vigencia:`, `Fecha fin de vigencia:`, `Códigos adicionales`, and the grouped
+  `Unidades de medida` header with child columns `Código` and `Descripción`
+- `Restricciones`: `HS_Code`, `Status`, `Overall_Status`, `Código`, `Descripción`, `Código adicional`,
+  `Valor`, `Código de cuota`
+- `Cuotas`: `HS_Code`, `Status`, `Overall_Status`, and a single merged `TRATAMIENTO GENERAL` column
 
-If a section has no data or cannot be extracted for a code, the worksheet is still created and the row is written with `HS_Code`, `Status`, and `Overall_Status`.
+If a section has no data or cannot be extracted for a code, the worksheet is still created and the row
+is written with `HS_Code`, `Status`, and `Overall_Status` while the remaining required columns stay empty.
 
 ### Normalized section output
 
-- `Derechos e impuestos` is exported with agreement-specific duty columns per HS row so that each treatment remains in its own column instead of a generic row blob
-- `Restricciones` is exported as one row per source restriction row, preserving duplicates and keeping `Código`, `Descripción`, `Código adicional`, `Valor`, and `Código de cuota` in that order
-- `Cuotas` writes the SAT portal result text to the merged `TRATAMIENTO GENERAL` column, including the `Resultados de la búsqueda: ` prefix and empty-state wording when no quota exists, while preserving raw extracted fields after the required columns
-- `Derechos e impuestos` maps each agreement table to a `DAI_<SUFFIX>`/`IVA_<SUFFIX>`-style column using a data-driven suffix: the general schedule becomes `GENERAL`, an explicit trailing code on the agreement name (for example "... – MX") is used verbatim, and agreements without an explicit code fall back to a sanitized slug of their name
-- `Nomenclatura` is exported as one row per named table/content block, preserving the scalar fields:
-  - `Sección`
-  - `Capítulo:`
-  - `Fecha inicio de vigencia:`
-  - `Fecha fin de vigencia:`
-  - plus all columns from `Código de Mercancías`, the complete `Códigos adicionales` content or empty-state message, `Unidades de medida`, and the content/status of `Clasificadores estadísticos`, `Descripciones mínimas`, and `Criterios de Clasificación`
+- `Derechos e impuestos` pivots every duty/agreement table into its own column; `Código` keeps the
+  source codes (for example `DAI | IVA`) that feed the pivot, and rows are keyed by
+  `Código adicional`/`Código de cuota`
+- `Derechos e impuestos` maps each agreement table to a `DAI_<SUFFIX>`/`IVA_<SUFFIX>`-style column using
+  a data-driven suffix: the general schedule becomes `GENERAL`, an explicit trailing code on the
+  agreement name (for example "... – MX") is used verbatim, and agreements without an explicit code fall
+  back to a sanitized slug of their name. The agreement name itself is never exported as a column.
+- `Restricciones` is exported as one row per source restriction row, preserving duplicates
+- `Cuotas` writes only the SAT portal informational text to the merged `TRATAMIENTO GENERAL` column (for
+  example `No se han encontrado cuotas/contingentes para el inciso consultado`). The displayed text is
+  preserved exactly; the `Resultados de la búsqueda: ` prefix is never invented or duplicated.
+- `Nomenclatura` is exported as one row per `Unidades de medida` record (or a single row when none
+  exists), repeating the scalar fields and the `Códigos adicionales` message, typically
+  `No se han encontrado códigos adicionales asociados al inciso consultado`
 
 ## CAPTCHA handling
 

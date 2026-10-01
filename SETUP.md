@@ -58,11 +58,12 @@ python main.py hs_codes.txt output_results.xlsx --resume
 The generated workbook includes separate worksheets for `Derechos e impuestos`,
 `Nomenclatura`, `Restricciones`, and `Cuotas`.
 
-The workbook uses grouped blue headers to mirror the SAT portal export layout:
-- `Derechos e impuestos` places agreement/treatment values in dedicated columns such as `DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, etc.
-- `Nomenclatura` keeps the scalar SAT fields first and groups `Unidades de medida` into `Código` and `Descripción`.
+The workbook uses grouped blue headers to mirror the SAT portal export layout and a strict per-sheet
+column whitelist (no `Table_Name`, `Record_Type`, `Message`, or `Resultado` helper columns):
+- `Derechos e impuestos` keeps `Código` and places agreement/treatment values in dedicated columns such as `DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, etc., followed by `Código adicional` and `Código de cuota`.
+- `Nomenclatura` keeps the scalar SAT fields plus `Códigos adicionales` first and groups `Unidades de medida` into `Código` and `Descripción`.
 - `Restricciones` keeps `Código`, `Descripción`, `Código adicional`, `Valor`, and `Código de cuota` in a fixed order.
-- `Cuotas` includes a merged `TRATAMIENTO GENERAL` column with the SAT message/result text, including the no-results wording when applicable.
+- `Cuotas` includes only a merged `TRATAMIENTO GENERAL` column holding the SAT informational message, such as `No se han encontrado cuotas/contingentes para el inciso consultado`.
 
 The scraper processes every valid numeric HS code in `hs_codes.txt` in order. Files
 with fewer than 20 codes, exactly 20 codes, or more than 20 codes are all supported.
