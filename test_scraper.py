@@ -286,7 +286,7 @@ class TestSATTariffScraper(unittest.TestCase):
         )
         self.assertIsNone(data[SECTION_STATUS_KEY])
 
-    def test_format_quota_message_does_not_duplicate_prefix(self):
+    def test_format_quota_message_preserves_displayed_text_without_inventing_prefix(self):
         prefixed = (
             "Resultados de la búsqueda: "
             "No se han encontrado cuotas/contingentes para el inciso consultado"
@@ -294,8 +294,10 @@ class TestSATTariffScraper(unittest.TestCase):
         self.assertEqual(self.scraper._format_quota_message(prefixed), prefixed)
         decomposed = unicodedata.normalize("NFD", prefixed)
         self.assertEqual(self.scraper._format_quota_message(decomposed), decomposed)
-        spaced = f"\n  {prefixed}"
-        self.assertEqual(self.scraper._format_quota_message(spaced), spaced)
+
+        plain = "No se han encontrado cuotas/contingentes para el inciso consultado"
+        self.assertEqual(self.scraper._format_quota_message(plain), plain)
+        self.assertEqual(self.scraper._format_quota_message(""), "")
 
     def test_agreement_suffix_maps_general_treatment(self):
         self.assertEqual(
@@ -517,11 +519,12 @@ class TestSATTariffScraper(unittest.TestCase):
 
             duties_sheet = workbook["Derechos e impuestos"]
             self.assertEqual(
-                self._visible_headers(duties_sheet)[:9],
+                self._visible_headers(duties_sheet),
                 [
                     "HS_Code",
                     "Status",
                     "Overall_Status",
+                    "Código",
                     "DAI_GENERAL",
                     "IVA_GENERAL",
                     "DAI_MX",
@@ -530,21 +533,22 @@ class TestSATTariffScraper(unittest.TestCase):
                     "Código de cuota",
                 ],
             )
-            self.assertIn("D1:E1", {str(cell_range) for cell_range in duties_sheet.merged_cells.ranges})
-            self.assertEqual(duties_sheet["D1"].value, "GENERAL")
-            self.assertEqual(duties_sheet["F1"].value, "MX")
-            self.assertEqual(duties_sheet["G1"].value, "CL")
+            self.assertIn("E1:F1", {str(cell_range) for cell_range in duties_sheet.merged_cells.ranges})
+            self.assertEqual(duties_sheet["E1"].value, "GENERAL")
+            self.assertEqual(duties_sheet["G1"].value, "MX")
+            self.assertEqual(duties_sheet["H1"].value, "CL")
             self.assertEqual(duties_sheet["A3"].value, "0101210000")
-            self.assertEqual(duties_sheet["D3"].value, "5%")
-            self.assertEqual(duties_sheet["E3"].value, "12%")
-            self.assertEqual(duties_sheet["F3"].value, "0%")
-            self.assertEqual(duties_sheet["G3"].value, "1%")
-            self.assertEqual(duties_sheet["H3"].value, "AD1")
-            self.assertEqual(duties_sheet["I3"].value, "CQ1")
+            self.assertEqual(duties_sheet["D3"].value, "DAI | IVA")
+            self.assertEqual(duties_sheet["E3"].value, "5%")
+            self.assertEqual(duties_sheet["F3"].value, "12%")
+            self.assertEqual(duties_sheet["G3"].value, "0%")
+            self.assertEqual(duties_sheet["H3"].value, "1%")
+            self.assertEqual(duties_sheet["I3"].value, "AD1")
+            self.assertEqual(duties_sheet["J3"].value, "CQ1")
 
             nomenclature_sheet = workbook["Nomenclatura"]
             self.assertEqual(
-                self._visible_headers(nomenclature_sheet)[:10],
+                self._visible_headers(nomenclature_sheet),
                 [
                     "HS_Code",
                     "Status",
@@ -563,13 +567,17 @@ class TestSATTariffScraper(unittest.TestCase):
             self.assertEqual(nomenclature_sheet["I2"].value, "Código")
             self.assertEqual(nomenclature_sheet["J2"].value, "Descripción")
             self.assertEqual(nomenclature_sheet["A3"].value, "0101210000")
-            self.assertEqual(nomenclature_sheet["H4"].value, "No se han encontrado códigos adicionales asociados al inciso consultado")
-            self.assertEqual(nomenclature_sheet["I5"].value, "KGM")
-            self.assertEqual(nomenclature_sheet["J5"].value, "Kilogramo")
+            self.assertEqual(nomenclature_sheet["D3"].value, "Sección I")
+            self.assertEqual(
+                nomenclature_sheet["H3"].value,
+                "No se han encontrado códigos adicionales asociados al inciso consultado",
+            )
+            self.assertEqual(nomenclature_sheet["I3"].value, "KGM")
+            self.assertEqual(nomenclature_sheet["J3"].value, "Kilogramo")
 
             restrictions_sheet = workbook["Restricciones"]
             self.assertEqual(
-                self._visible_headers(restrictions_sheet)[:8],
+                self._visible_headers(restrictions_sheet),
                 [
                     "HS_Code",
                     "Status",
@@ -590,13 +598,13 @@ class TestSATTariffScraper(unittest.TestCase):
             self.assertEqual(quotas_sheet["A3"].value, "0101210000")
             self.assertEqual(quotas_sheet["B3"].value, "Success")
             self.assertEqual(
-                self._visible_headers(quotas_sheet)[:4],
+                self._visible_headers(quotas_sheet),
                 ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"],
             )
             self.assertIn("D1:D2", {str(cell_range) for cell_range in quotas_sheet.merged_cells.ranges})
             self.assertEqual(
                 quotas_sheet["D3"].value,
-                "Resultados de la búsqueda: No se han encontrado cuotas/contingentes para el inciso consultado",
+                "No se han encontrado cuotas/contingentes para el inciso consultado",
             )
             self.assertEqual(duties_sheet.freeze_panes, "A3")
             self.assertEqual(nomenclature_sheet.freeze_panes, "A3")
@@ -609,7 +617,307 @@ class TestSATTariffScraper(unittest.TestCase):
             if os.path.exists(output_file):
                 os.remove(output_file)
 
-    def test_export_to_excel_uses_overall_status_for_unattempted_sections(self):
+    FORBIDDEN_SHEET_COLUMNS = ("Table_Name", "Record_Type", "Message", "Resultado", "Content")
+
+    @staticmethod
+    def _strict_fixture_result():
+        """A result whose parsed rows are full of internal helper metadata."""
+        return {
+            "HS_Code": "0101210000",
+            "Status": "Success",
+            "Sections": {
+                "Derechos e impuestos": {
+                    SECTION_ROWS_KEY: [
+                        {
+                            "Table_Name": "TRATAMIENTO GENERAL",
+                            "Record_Type": "TRATAMIENTO GENERAL",
+                            "Código": "DAI",
+                            "Descripción": "Derecho arancelario",
+                            "Código adicional": "AD1",
+                            "Valor": "5%",
+                            "Código de cuota": "CQ1",
+                        },
+                        {
+                            "Table_Name": "TRATAMIENTO GENERAL",
+                            "Código": "IVA",
+                            "Descripción": "Impuesto al valor agregado",
+                            "Código adicional": "AD1",
+                            "Valor": "12%",
+                            "Código de cuota": "CQ1",
+                        },
+                        {
+                            "Table_Name": (
+                                "Tratado de Libre Comercio Entre Los Estados Unidos "
+                                "Mexicanos y las Repúblicas de Costa Rica, El Salvador, "
+                                "Guatemala, Honduras y Nicaragua – MX"
+                            ),
+                            "Código": "DAI",
+                            "Descripción": "Preferencial",
+                            "Código adicional": "AD1",
+                            "Valor": "0%",
+                            "Código de cuota": "CQ1",
+                        },
+                        {
+                            "Table_Name": "Tratado de Libre Comercio con Chile - CL",
+                            "Código": "DAI",
+                            "Descripción": "Preferencial",
+                            "Código adicional": "AD1",
+                            "Valor": "1%",
+                            "Código de cuota": "CQ1",
+                        },
+                        {
+                            "Table_Name": "Convenio Centroamericano de Incentivos Fiscales",
+                            "Código": "DAI",
+                            "Descripción": "Preferencial",
+                            "Código adicional": "AD1",
+                            "Valor": "2%",
+                            "Código de cuota": "CQ1",
+                        },
+                    ]
+                },
+                "Nomenclatura": {
+                    SECTION_ROWS_KEY: [
+                        {
+                            "Table_Name": "Código de Mercancías",
+                            "Record_Type": "Código de Mercancías",
+                            "Sección": "Sección I",
+                            "Capítulo:": "Capítulo 01",
+                            "Fecha inicio de vigencia:": "2024-01-01",
+                            "Fecha fin de vigencia:": "2024-12-31",
+                            "Código": "0101",
+                            "Descripción": "Caballos",
+                            "Notas": "Vivo",
+                        },
+                        {
+                            "Table_Name": "Códigos adicionales",
+                            "Record_Type": "Códigos adicionales",
+                            "Message": (
+                                "No se han encontrado códigos adicionales asociados "
+                                "al inciso consultado"
+                            ),
+                        },
+                        {
+                            "Table_Name": "Unidades de medida",
+                            "Record_Type": "Unidades de medida",
+                            "Código": "KGM",
+                            "Descripción": "Kilogramo",
+                        },
+                        {
+                            "Table_Name": "Clasificadores estadísticos",
+                            "Record_Type": "Clasificadores estadísticos",
+                            "Content": "No aplica",
+                        },
+                    ]
+                },
+                "Restricciones": {
+                    SECTION_ROWS_KEY: [
+                        {
+                            "Table_Name": "TRATAMIENTO GENERAL",
+                            "Record_Type": "TRATAMIENTO GENERAL",
+                            "Código": "R1",
+                            "Descripción": "Licencia previa",
+                            "Código adicional": "AD3",
+                            "Valor": "Obligatoria",
+                            "Código de cuota": "CQR",
+                        },
+                        {
+                            "Table_Name": "TRATAMIENTO GENERAL",
+                            "Record_Type": "TRATAMIENTO GENERAL",
+                            "Código": "R1",
+                            "Descripción": "Licencia previa",
+                            "Código adicional": "AD3",
+                            "Valor": "Obligatoria",
+                            "Código de cuota": "CQR",
+                        },
+                    ]
+                },
+                "Cuotas": {
+                    SECTION_ROWS_KEY: [
+                        {
+                            "Table_Name": "TRATAMIENTO GENERAL",
+                            "Resultado": "Sin cuotas",
+                            "Message": (
+                                "No se han encontrado cuotas/contingentes para el "
+                                "inciso consultado"
+                            ),
+                        }
+                    ]
+                },
+            },
+            "Section_Statuses": {section_label: "Success" for section_label in SECTION_LABELS},
+        }
+
+    def _export_fixture_workbook(self, results):
+        self.scraper.results = results
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as temp_file:
+            output_file = temp_file.name
+        self.addCleanup(lambda: os.path.exists(output_file) and os.remove(output_file))
+        self.scraper.export_to_excel(output_file)
+        return load_workbook(output_file)
+
+    @staticmethod
+    def _all_header_values(sheet):
+        header_rows = TestSATTariffScraper._header_rows_for_sheet(sheet)
+        return [
+            sheet.cell(row=row_index, column=column_index).value
+            for row_index in range(1, header_rows + 1)
+            for column_index in range(1, sheet.max_column + 1)
+        ]
+
+    def test_export_to_excel_applies_strict_per_sheet_whitelists(self):
+        workbook = self._export_fixture_workbook([self._strict_fixture_result()])
+
+        self.assertEqual(workbook.sheetnames, list(SECTION_LABELS))
+
+        expected_headers = {
+            "Derechos e impuestos": [
+                "HS_Code",
+                "Status",
+                "Overall_Status",
+                "Código",
+                "DAI_GENERAL",
+                "IVA_GENERAL",
+                "DAI_MX",
+                "DAI_CL",
+                "DAI_CONVENIO_CENTROAMERICANO_DE_INCENTIVOS_FISCALES",
+                "Código adicional",
+                "Código de cuota",
+            ],
+            "Nomenclatura": [
+                "HS_Code",
+                "Status",
+                "Overall_Status",
+                "Sección",
+                "Capítulo:",
+                "Fecha inicio de vigencia:",
+                "Fecha fin de vigencia:",
+                "Códigos adicionales",
+                "Unidades de medida - Código",
+                "Unidades de medida - Descripción",
+            ],
+            "Restricciones": [
+                "HS_Code",
+                "Status",
+                "Overall_Status",
+                "Código",
+                "Descripción",
+                "Código adicional",
+                "Valor",
+                "Código de cuota",
+            ],
+            "Cuotas": ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"],
+        }
+
+        for sheet_name, headers in expected_headers.items():
+            sheet = workbook[sheet_name]
+            self.assertEqual(self._visible_headers(sheet), headers, sheet_name)
+            header_values = self._all_header_values(sheet)
+            for forbidden in self.FORBIDDEN_SHEET_COLUMNS:
+                self.assertNotIn(forbidden, header_values, f"{forbidden} leaked into {sheet_name}")
+
+    def test_export_to_excel_maps_agreements_to_dai_columns(self):
+        workbook = self._export_fixture_workbook([self._strict_fixture_result()])
+        duties_sheet = workbook["Derechos e impuestos"]
+        headers = self._visible_headers(duties_sheet)
+
+        self.assertIn("DAI_MX", headers)
+        self.assertIn("DAI_CL", headers)
+        self.assertIn("DAI_CONVENIO_CENTROAMERICANO_DE_INCENTIVOS_FISCALES", headers)
+        self.assertEqual(duties_sheet.cell(row=3, column=headers.index("DAI_MX") + 1).value, "0%")
+        self.assertEqual(duties_sheet.cell(row=3, column=headers.index("DAI_CL") + 1).value, "1%")
+        self.assertEqual(duties_sheet["E1"].value, "GENERAL")
+        self.assertEqual(duties_sheet["G1"].value, "MX")
+        self.assertEqual(duties_sheet["H1"].value, "CL")
+        self.assertEqual(
+            duties_sheet["I1"].value,
+            "CONVENIO_CENTROAMERICANO_DE_INCENTIVOS_FISCALES",
+        )
+
+    def test_export_to_excel_preserves_duplicate_restriction_rows(self):
+        workbook = self._export_fixture_workbook([self._strict_fixture_result()])
+        restrictions_sheet = workbook["Restricciones"]
+
+        data_rows = [
+            [cell.value for cell in row]
+            for row in restrictions_sheet.iter_rows(min_row=2)
+        ]
+        self.assertEqual(len(data_rows), 2)
+        self.assertEqual(data_rows[0], data_rows[1])
+        self.assertEqual(
+            data_rows[0],
+            [
+                "0101210000",
+                "Success",
+                "Success",
+                "R1",
+                "Licencia previa",
+                "AD3",
+                "Obligatoria",
+                "CQR",
+            ],
+        )
+
+    def test_export_to_excel_quotas_only_exposes_tratamiento_general_message(self):
+        workbook = self._export_fixture_workbook([self._strict_fixture_result()])
+        quotas_sheet = workbook["Cuotas"]
+
+        self.assertEqual(quotas_sheet.max_column, 4)
+        self.assertIn("D1:D2", {str(cell_range) for cell_range in quotas_sheet.merged_cells.ranges})
+        self.assertEqual(
+            quotas_sheet["D3"].value,
+            "No se han encontrado cuotas/contingentes para el inciso consultado",
+        )
+        self.assertEqual(quotas_sheet.max_row, 3)
+
+    def test_export_to_excel_nomenclature_keeps_grouped_units_header_without_units(self):
+        result = self._strict_fixture_result()
+        result["Sections"]["Nomenclatura"][SECTION_ROWS_KEY] = [
+            row
+            for row in result["Sections"]["Nomenclatura"][SECTION_ROWS_KEY]
+            if row.get("Record_Type") != "Unidades de medida"
+        ]
+
+        workbook = self._export_fixture_workbook([result])
+        nomenclature_sheet = workbook["Nomenclatura"]
+
+        self.assertIn(
+            "I1:J1",
+            {str(cell_range) for cell_range in nomenclature_sheet.merged_cells.ranges},
+        )
+        self.assertEqual(nomenclature_sheet["I1"].value, "Unidades de medida")
+        self.assertEqual(nomenclature_sheet["I2"].value, "Código")
+        self.assertEqual(nomenclature_sheet["J2"].value, "Descripción")
+        self.assertEqual(
+            nomenclature_sheet["H3"].value,
+            "No se han encontrado códigos adicionales asociados al inciso consultado",
+        )
+        self.assertIsNone(nomenclature_sheet["I3"].value)
+
+    def test_project_rows_drops_helper_columns_and_rejects_forbidden_whitelists(self):
+        ordered_columns = self.scraper._ordered_columns_for_section(
+            "Restricciones",
+            [],
+        )
+        projected = self.scraper._project_rows(
+            [
+                {
+                    "HS_Code": "0101210000",
+                    "Table_Name": "TRATAMIENTO GENERAL",
+                    "Record_Type": "TRATAMIENTO GENERAL",
+                    "Message": "mensaje",
+                    "Código": "R1",
+                }
+            ],
+            ordered_columns,
+        )
+        self.assertEqual(list(projected[0]), ordered_columns)
+        for forbidden in self.FORBIDDEN_SHEET_COLUMNS:
+            self.assertNotIn(forbidden, projected[0])
+
+        with self.assertRaises(ValueError):
+            self.scraper._project_rows([], ["HS_Code", "Table_Name"])
+
+
         self.scraper.results = [
             {
                 "HS_Code": "0101210000",
