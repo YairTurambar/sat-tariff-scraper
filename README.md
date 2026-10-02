@@ -1,101 +1,123 @@
 # sat-tariff-scraper
 
-Automated scraper for Guatemalan SAT tariff (arancel integrado) data extraction to Excel.
+Packaged Python application for collecting SAT tariff portal data into a resumable SQLite store and exporting a four-sheet Excel workbook.
 
-## Output workbook
+> This repository now uses `pyproject.toml` instead of `requirements.txt`. Review and confirm the included MIT `LICENSE` placeholder before publishing.
 
-The generated Excel file keeps SAT data in four separate worksheets:
+## Features
 
-- `Derechos e impuestos`
-- `Nomenclatura`
-- `Restricciones`
-- `Cuotas`
+- Python 3.11+ `src/` package: `sat_tariff`
+- Offline-safe commands: `validate-input`, `status`, `export`
+- Browser-backed commands: `run`, `resume`, `retry-failed`
+- SQLite persistence for resumable section-by-section scraping
+- Pure HTML extractors with pytest coverage
+- Manual-only CAPTCHA handling
+- Rebuildable Excel output with four sheets:
+  - `Derechos e impuestos`
+  - `Nomenclatura`
+  - `Restricciones`
+  - `Cuotas`
 
-Each worksheet uses a **strict column whitelist**: only the columns listed below are written, and
-helper/metadata fields such as `Table_Name`, `Record_Type`, `Message`, or `Resultado` are never
-exported, even though they are still used internally while parsing.
-
-- `Derechos e impuestos`: `HS_Code`, `Status`, `Overall_Status`, `Código`, the agreement duty columns
-  (`DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, `DAI_CL`, …) grouped under a merged agreement header, then
-  `Código adicional` and `Código de cuota`
-- `Nomenclatura`: `HS_Code`, `Status`, `Overall_Status`, `Sección`, `Capítulo:`,
-  `Fecha inicio de vigencia:`, `Fecha fin de vigencia:`, `Códigos adicionales`, and the grouped
-  `Unidades de medida` header with child columns `Código` and `Descripción`
-- `Restricciones`: `HS_Code`, `Status`, `Overall_Status`, `Código`, `Descripción`, `Código adicional`,
-  `Valor`, `Código de cuota`
-- `Cuotas`: `HS_Code`, `Status`, `Overall_Status`, and a single merged `TRATAMIENTO GENERAL` column
-
-If a section has no data or cannot be extracted for a code, the worksheet is still created and the row
-is written with `HS_Code`, `Status`, and `Overall_Status` while the remaining required columns stay empty.
-
-### Normalized section output
-
-- `Derechos e impuestos` pivots every duty/agreement table into its own column; `Código` keeps the
-  source codes (for example `DAI | IVA`) that feed the pivot, and rows are keyed by
-  `Código adicional`/`Código de cuota`
-- `Derechos e impuestos` maps each agreement table to a `DAI_<SUFFIX>`/`IVA_<SUFFIX>`-style column using
-  a data-driven suffix: the general schedule becomes `GENERAL`, an explicit trailing code on the
-  agreement name (for example "... – MX") is used verbatim, and agreements without an explicit code fall
-  back to a sanitized slug of their name. The agreement name itself is never exported as a column.
-- `Restricciones` is exported as one row per source restriction row, preserving duplicates
-- `Cuotas` writes only the SAT portal informational text to the merged `TRATAMIENTO GENERAL` column (for
-  example `No se han encontrado cuotas/contingentes para el inciso consultado`). The displayed text is
-  preserved exactly; the `Resultados de la búsqueda: ` prefix is never invented or duplicated.
-- `Nomenclatura` is exported as one row per `Unidades de medida` record (or a single row when none
-  exists), repeating the scalar fields and the `Códigos adicionales` message, typically
-  `No se han encontrado códigos adicionales asociados al inciso consultado`
-
-## CAPTCHA handling
-
-CAPTCHA solving remains manual. When SAT shows a CAPTCHA, solve it in the browser window and the scraper will continue after the CAPTCHA field disappears.
-
-## Running the scraper
-
-The previous positional invocation still works:
+## Installation
 
 ```bash
-python main.py hs_codes.txt sat_tariff_data.xlsx
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+playwright install
 ```
 
-The scraper now accepts any number of numeric HS codes from the input file. It processes
-every valid numeric line in order, including files with 0, 1, 19, 20, or more than 20 codes.
-Non-numeric lines are skipped with a warning in `scraper.log`.
+`playwright install` downloads browser binaries and may need to be run outside restricted CI/sandbox environments.
 
-### Resume support
+## Configuration
 
-Each run writes a JSON state file next to the output workbook by default:
+Copy `.env.example` to `.env` if you want to override defaults. Useful settings include:
 
-```text
-sat_tariff_data.xlsx.state.json
-```
+- `SAT_INPUT_FILE=HS_codes.txt`
+- `SAT_SQLITE_DB=sat_tariff.db`
+- `SAT_OUTPUT_XLSX=sat_tariff_example.xlsx`
+- `SAT_HEADLESS=false`
+- `SAT_INVALID_LINE_POLICY=skip`
 
-Use `--resume` to continue a long run later:
+Without a `.env`, offline commands still work with defaults.
+
+## Input file
+
+`HS_codes.txt` should contain 1-500 non-empty lines. Example values shipped here are fictional 10-digit numeric strings starting with `9999`.
+
+Validation rules:
+
+- preserves leading zeroes
+- detects duplicates and processes each unique code once
+- flags suspicious formats (non-digits or length outside 4-10)
+- honors `SAT_INVALID_LINE_POLICY=skip|process`
+
+## CLI usage
 
 ```bash
-python main.py hs_codes.txt sat_tariff_data.xlsx --resume
+python -m sat_tariff validate-input
+python -m sat_tariff status
+python -m sat_tariff export
+python -m sat_tariff run
+python -m sat_tariff resume
+python -m sat_tariff retry-failed
 ```
 
-Resume behavior:
+### Command notes
 
-- skips only HS codes whose prior overall status was `Success`
-- retries previously failed or incomplete HS codes
-- preserves the input file order in the regenerated workbook
-- rewrites the same four-sheet workbook without duplicating HS-code rows
+- `validate-input`: validates `HS_codes.txt` only
+- `status`: shows SQLite state counts only
+- `export`: creates `sat_tariff_example.xlsx` from SQLite, even when the DB only has headers/no rows
+- `run`: validates input, opens Playwright, searches codes, persists section data
+- `resume`: processes unfinished codes from SQLite
+- `retry-failed`: resets retryable/CAPTCHA-blocked rows and tries them again
 
-### Delay and retry options
+## Manual CAPTCHA flow
 
-You can tune long-run pacing from the CLI:
+CAPTCHA handling is manual-only.
+
+1. Run `python -m sat_tariff run`
+2. When the portal shows a CAPTCHA, solve it in the visible browser window
+3. Return to the terminal and press Enter to let the scraper poll again
+4. The scraper continues only after the DOM no longer shows the CAPTCHA input
+
+No OCR, no external solving service, and no automatic bypass are implemented.
+
+## Resume and export
+
+- Scrape progress is stored in `sat_tariff.db`
+- Per-section raw rows are stored so Excel can be regenerated without re-scraping
+- Existing output workbooks are backed up before overwrite when `SAT_BACKUP_OUTPUT=true`
+
+## Reference screenshots
+
+Expected local screenshot filenames are documented in `references/README.md`:
+
+- `references/derechos_e_impuestos.png`
+- `references/nomenclatura.png`
+- `references/restricciones.png`
+- `references/cuotas.png`
+
+Those image files were **not** available in this environment, so no pixel-perfect verification was possible.
+
+## Tests
 
 ```bash
-python main.py hs_codes.txt sat_tariff_data.xlsx \
-  --delay-between-codes 3 \
-  --max-retries 2 \
-  --retry-backoff 5
+python -m pytest tests/unit -v
 ```
 
-- `--delay-between-codes`: pause between HS codes; default is `2`
-- `--max-retries`: bounded retries for transient per-code failures; default is `0`
-- `--retry-backoff`: exponential backoff base in seconds between retries; default is `2`
+Integration/manual tests live under `tests/integration/` and are skipped by default.
 
-CAPTCHA failures are not retried automatically in a loop. They remain session-blocking and
-must still be resolved manually in the browser.
+## Troubleshooting basics
+
+- `Playwright is not installed`: run `pip install -e .[dev]`
+- Browser package imported but no browsers installed: run `playwright install`
+- `validate-input` fails: fix empty input, >500 lines, or suspicious data depending on your chosen policy
+- `status` shows nothing: no rows have been stored yet
+- `export` creates headers only: the SQLite database does not yet contain scraped rows
+
+See `docs/troubleshooting.md` for more detail.
+
+## Responsible automation
+
+Use this tool only if you are authorized to access and collect data from the SAT portal. Throttle requests responsibly and do not overload the portal. This repository does **not** claim SAT terms of service were reviewed or verified in this environment.
