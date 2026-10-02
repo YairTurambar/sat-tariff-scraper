@@ -97,16 +97,10 @@ def test_exporter_builds_expected_workbook_structure():
     assert rights["A1"].font.bold is True
     assert rights["A1"].font.color.rgb[-6:] == "FFFFFF"
     assert rights.row_dimensions[1].height == 22
-    assert rights.freeze_panes == "A3"
-    assert rights["A3"].number_format == "@"
-    rights_merges = {str(cell_range) for cell_range in rights.merged_cells.ranges}
-    assert "A1:A2" in rights_merges  # HS_Code spans both header rows
-    assert "G1:G2" in rights_merges  # Código adicional spans both header rows
+    assert rights.freeze_panes == "A2"
+    assert rights["A2"].number_format == "@"
     rights_row1 = [cell.value for cell in rights[1]]
-    rights_row2 = [cell.value for cell in rights[2]]
-    assert rights_row1[4] == "TRATAMIENTO GENERAL"
-    assert rights_row1[5] == "Tratado de Libre Comercio - MX"
-    assert rights_row2[4:6] == ["DAI", "DAI"]
+    assert rights_row1[4:6] == ["DAI_GENERAL", "DAI_MX"]
 
     assert any(str(cell_range) == "I1:J1" for cell_range in nomenclature.merged_cells.ranges)
     assert nomenclature.freeze_panes == "A3"
@@ -117,7 +111,7 @@ def test_exporter_builds_expected_workbook_structure():
     for sheet in (restrictions, quotas):
         headers = [cell.value for cell in sheet[1] if cell.value]
         assert FORBIDDEN_EXPORT_COLUMNS.isdisjoint(headers)
-    rights_headers = [value for value in rights_row1 + rights_row2 if value]
+    rights_headers = [value for value in rights_row1 if value]
     assert FORBIDDEN_EXPORT_COLUMNS.isdisjoint(rights_headers)
     nomenclature_headers = [
         nomenclature.cell(row=2, column=index).value or nomenclature.cell(row=1, column=index).value
@@ -130,9 +124,7 @@ def test_exporter_builds_expected_workbook_structure():
     db_path.unlink(missing_ok=True)
 
 
-def test_rights_sheet_merges_multiple_codes_under_one_agreement_group(tmp_path):
-    """TRATAMIENTO GENERAL (and other agreements) should merge across every
-    duty/tax code column that belongs to them, not just a single column."""
+def test_rights_sheet_uses_flat_dynamic_headers(tmp_path):
     import sys
 
     scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
@@ -144,13 +136,8 @@ def test_rights_sheet_merges_multiple_codes_under_one_agreement_group(tmp_path):
     workbook = load_workbook(path)
     rights = workbook["Derechos e impuestos"]
 
-    merges = {str(cell_range) for cell_range in rights.merged_cells.ranges}
-    assert "E1:F1" in merges  # TRATAMIENTO GENERAL spans DAI + IVA columns
     row1 = [cell.value for cell in rights[1]]
-    row2 = [cell.value for cell in rights[2]]
-    assert row1[4] == "TRATAMIENTO GENERAL"
-    assert row2[4:6] == ["DAI", "IVA"]
-    assert row1[6] == "Tratado de Libre Comercio - MX"
-    assert row2[6] == "DAI"
+    assert row1[4:6] == ["DAI_GENERAL", "IVA_GENERAL"]
+    assert row1[6] == "DAI_MX"
 
     workbook.close()
