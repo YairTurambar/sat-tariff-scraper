@@ -1,6 +1,12 @@
 """Worksheet layout constants."""
 
-SHEET_ORDER = ["Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas"]
+SECTION_LABELS = ("Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas")
+STANDARD_SECTION_COLUMNS = ("Código", "Descripción", "Código adicional", "Valor", "Código de cuota")
+QUOTA_EMPTY_MESSAGE = "No se han encontrado cuotas/contingentes para el inciso consultado"
+DUTY_GROUP_ORDER_HINT = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+FORBIDDEN_EXPORT_COLUMNS = {"Table_Name", "Record_Type", "Message", "Resultado", "Content", "Input_Index"}
+
+SHEET_ORDER = list(SECTION_LABELS)
 RIGHTS_BASE_HEADERS = ["HS_Code", "Status", "Overall_Status", "Código"]
 RIGHTS_TRAILING_HEADERS = ["Código adicional", "Código de cuota"]
 NOMENCLATURE_HEADERS = [

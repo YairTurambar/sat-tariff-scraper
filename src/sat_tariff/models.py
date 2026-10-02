@@ -56,6 +56,7 @@ class NomenclatureRecord:
     source_status: str
     code: str = ""
     description: str = ""
+    content: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

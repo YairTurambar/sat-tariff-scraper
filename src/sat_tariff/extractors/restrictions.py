@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from .common import ExtractionResult, parse_html, table_to_dicts
+from .common import ExtractionResult, iter_standard_section_tables, parse_html
 from ..models import RestrictionRecord
-
 
 
 def parse_restrictions(html: str) -> ExtractionResult[RestrictionRecord]:
     soup = parse_html(html)
     rows: list[RestrictionRecord] = []
-    for table in soup.find_all("table"):
-        dict_rows = table_to_dicts(table)
-        if not dict_rows:
-            continue
-        if not {"Código", "Descripción"}.issubset(dict_rows[0]):
-            continue
+    for _title, dict_rows in iter_standard_section_tables(soup):
         for row in dict_rows:
             rows.append(
                 RestrictionRecord(

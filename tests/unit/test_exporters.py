@@ -4,6 +4,7 @@ import uuid
 from openpyxl import load_workbook
 
 from sat_tariff.config import AppConfig
+from sat_tariff.exporters.layouts import FORBIDDEN_EXPORT_COLUMNS
 from sat_tariff.exporters.excel import export_workbook
 from sat_tariff.storage import Storage
 
@@ -95,7 +96,8 @@ def test_exporter_builds_expected_workbook_structure():
     assert rights["A1"].fill.fgColor.rgb[-6:] == "4472C4"
     assert rights.freeze_panes == "A2"
     assert rights["A2"].number_format == "@"
-    assert all(header not in [cell.value for cell in rights[1]] for header in ["Table_Name", "Record_Type", "Message", "Resultado"])
+    rights_headers = [cell.value for cell in rights[1]]
+    assert rights_headers[4:6] == ["DAI_GENERAL", "DAI_MX"]
 
     assert any(str(cell_range) == "I1:J1" for cell_range in nomenclature.merged_cells.ranges)
     assert nomenclature.freeze_panes == "A3"
@@ -103,6 +105,14 @@ def test_exporter_builds_expected_workbook_structure():
 
     assert restrictions["A1"].value == "HS_Code"
     assert quotas["D1"].value == "TRATAMIENTO GENERAL"
+    for sheet in (rights, restrictions, quotas):
+        headers = [cell.value for cell in sheet[1] if cell.value]
+        assert FORBIDDEN_EXPORT_COLUMNS.isdisjoint(headers)
+    nomenclature_headers = [
+        nomenclature.cell(row=2, column=index).value or nomenclature.cell(row=1, column=index).value
+        for index in range(1, nomenclature.max_column + 1)
+    ]
+    assert FORBIDDEN_EXPORT_COLUMNS.isdisjoint({header for header in nomenclature_headers if header})
 
     workbook.close()
     path.unlink(missing_ok=True)

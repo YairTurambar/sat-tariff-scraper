@@ -9,19 +9,21 @@ from pathlib import Path
 import re
 import shutil
 from typing import Any
+import unicodedata
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
 from ..validation.output_validator import validate_workbook_structure
-from .layouts import NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
+from .layouts import DUTY_GROUP_ORDER_HINT, FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, style_data_cells, style_headers
 
 
-
 def _ascii_slug(value: str) -> str:
-    slug = re.sub(r"[^A-Z0-9]+", "_", value.upper()).strip("_")
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii").upper()
+    slug = re.sub(r"[^A-Z0-9]+", "_", ascii_value).strip("_")
     return slug or "OTRO"
 
 
@@ -46,13 +48,21 @@ def _base_row(bundle: dict[str, Any], section_key: str) -> dict[str, Any]:
 
 
 def _rights_dynamic_columns(bundles: list[dict[str, Any]]) -> list[str]:
-    ordered = OrderedDict()
+    ordered: OrderedDict[str, int] = OrderedDict()
     for bundle in bundles:
         for row in bundle.get("rights", {}).get("rows", []):
             export_name = f"{_ascii_slug(row.get('code', ''))}_{_agreement_suffix(row.get('agreement_name', ''))}"
             if export_name != "_":
-                ordered.setdefault(export_name, None)
-    return list(ordered.keys())
+                ordered.setdefault(export_name, len(ordered))
+
+    def sort_key(column_name: str) -> tuple[int, int, str]:
+        _code, _sep, suffix = column_name.partition("_")
+        if suffix == "GENERAL":
+            return (0, ordered[column_name], column_name)
+        hint_index = DUTY_GROUP_ORDER_HINT.index(suffix) if suffix in DUTY_GROUP_ORDER_HINT else len(DUTY_GROUP_ORDER_HINT)
+        return (1 + hint_index, ordered[column_name], column_name)
+
+    return sorted(ordered.keys(), key=sort_key)
 
 
 
@@ -111,6 +121,12 @@ def _build_nomenclature_rows(bundles: list[dict[str, Any]]) -> list[dict[str, An
             for code, description in units:
                 rows.append({**shared, "Código": code, "Descripción": description})
     return rows
+
+
+def _assert_no_forbidden_headers(headers: list[str]) -> None:
+    leaked = FORBIDDEN_EXPORT_COLUMNS.intersection(headers)
+    if leaked:
+        raise ValueError(f"Forbidden export columns leaked into workbook: {sorted(leaked)}")
 
 
 
@@ -216,6 +232,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
     for sheet_name in SHEET_ORDER:
         ws = workbook.create_sheet(sheet_name)
         if sheet_name == "Derechos e impuestos":
+            _assert_no_forbidden_headers(rights_headers)
             _write_headers(ws, rights_headers)
             for row in sections[sheet_name]:
                 ws.append([row.get(header, "") for header in rights_headers])
@@ -225,9 +242,11 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             style_data_cells(ws, 2)
             header_rows = 1
         elif sheet_name == "Nomenclatura":
+            _assert_no_forbidden_headers(NOMENCLATURE_HEADERS)
             _write_nomenclature_sheet(ws, sections[sheet_name])
             header_rows = 2
         elif sheet_name == "Restricciones":
+            _assert_no_forbidden_headers(RESTRICTIONS_HEADERS)
             _write_headers(ws, RESTRICTIONS_HEADERS)
             for row in sections[sheet_name]:
                 ws.append([row.get(header, "") for header in RESTRICTIONS_HEADERS])
@@ -237,6 +256,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             style_data_cells(ws, 2)
             header_rows = 1
         else:
+            _assert_no_forbidden_headers(QUOTAS_HEADERS)
             _write_headers(ws, QUOTAS_HEADERS)
             for row in sections[sheet_name]:
                 ws.append([row.get(header, "") for header in QUOTAS_HEADERS])

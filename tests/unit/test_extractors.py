@@ -13,7 +13,11 @@ def read_fixture(name: str) -> str:
 
 
 def test_rights_taxes_preserves_titles_and_order():
-    result = parse_rights_taxes(read_fixture("rights_taxes.html"))
+    html = (
+        "<table><tr><th>Foo</th><th>Bar</th></tr><tr><td>a</td><td>b</td></tr></table>"
+        + read_fixture("rights_taxes.html")
+    )
+    result = parse_rights_taxes(html)
     assert result.status == "ok"
     assert [row.agreement_name for row in result.rows] == [
         "TRATAMIENTO GENERAL",
@@ -28,11 +32,13 @@ def test_nomenclature_parses_fields_and_units():
     assert result.status == "ok"
     goods = next(row for row in result.rows if row.record_type == "goods")
     unit = next(row for row in result.rows if row.record_type == "unit")
+    extra = next(row for row in result.rows if row.record_type == "Clasificadores estadísticos")
     assert goods.section == "Sección I"
     assert goods.effective_from_normalized == "2024-01-01"
     assert goods.additional_codes_text == "No se han encontrado códigos adicionales asociados al inciso consultado"
     assert unit.unit_code == "KGM"
     assert unit.unit_description == "Kilogramo"
+    assert extra.content == "No aplica"
 
 
 def test_restrictions_with_no_data_store_literal_message():
@@ -42,8 +48,13 @@ def test_restrictions_with_no_data_store_literal_message():
 
 
 def test_restrictions_with_data_parse_rows():
-    result = parse_restrictions(read_fixture("restrictions_with_data.html"))
+    html = (
+        "<table><tr><th>Código</th><th>Descripción</th></tr><tr><td>x</td><td>ignored</td></tr></table>"
+        + read_fixture("restrictions_with_data.html")
+    )
+    result = parse_restrictions(html)
     assert result.status == "ok"
+    assert len(result.rows) == 1
     assert result.rows[0].quota_code == "CQR"
 
 

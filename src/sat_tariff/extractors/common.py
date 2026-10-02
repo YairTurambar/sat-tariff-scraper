@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 from typing import Generic, TypeVar
+import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -35,6 +36,28 @@ def normalize_label(value: str | None) -> str:
     return normalize_text(value).rstrip(":").casefold()
 
 
+def ascii_upper(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    return normalized.encode("ascii", "ignore").decode("ascii").upper()
+
+
+def normalized_header_map(headers: list[str]) -> dict[str, str]:
+    return {normalize_label(header): header for header in headers if header}
+
+
+def is_standard_section_table(table: Tag) -> bool:
+    rows = direct_rows(table)
+    if not rows:
+        return False
+    headers = [cell_text(cell) for cell in direct_cells(rows[0])]
+    normalized_headers = normalized_header_map(headers)
+    normalized_standard = {normalize_label(column) for column in STANDARD_HEADERS}
+    present = set(normalized_headers)
+    return {
+        normalize_label("Código"),
+        normalize_label("Descripción"),
+    }.issubset(present) and len(present.intersection(normalized_standard)) >= 3
+
 
 def direct_rows(table: Tag) -> list[Tag]:
     return [row for row in table.find_all("tr") if row.find_parent("table") is table]
@@ -63,6 +86,15 @@ def table_to_dicts(table: Tag) -> list[dict[str, str]]:
             continue
         extracted.append({header: values[index] if index < len(values) else "" for index, header in enumerate(headers)})
     return extracted
+
+
+def iter_standard_section_tables(soup: BeautifulSoup) -> list[tuple[str, list[dict[str, str]]]]:
+    matches: list[tuple[str, list[dict[str, str]]]] = []
+    for index, table in enumerate(soup.find_all("table"), start=1):
+        if not is_standard_section_table(table):
+            continue
+        matches.append((infer_table_title(table, f"Tabla {index}"), table_to_dicts(table)))
+    return matches
 
 
 

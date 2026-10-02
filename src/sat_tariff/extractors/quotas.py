@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from .common import ExtractionResult, normalize_text, parse_html
+from ..exporters.layouts import QUOTA_EMPTY_MESSAGE
 from ..models import QuotaRecord
 
-NO_QUOTA_MESSAGE = "No se han encontrado cuotas/contingentes para el inciso consultado"
+NO_QUOTA_MESSAGE = QUOTA_EMPTY_MESSAGE
 
 
 
