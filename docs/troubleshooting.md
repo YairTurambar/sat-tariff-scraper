@@ -62,7 +62,21 @@ interactive desktop. Run the scraper locally or on a remote machine with a GUI. 
 
 ## CAPTCHA blocks progress
 
-This project intentionally stops for manual CAPTCHA solving. Keep the browser visible and solve the challenge yourself.
+This project intentionally stops for manual CAPTCHA solving. Keep the browser visible, solve **and
+submit** the challenge there and do nothing in the terminal: the application polls the DOM and
+restarts the extraction by itself when `frmBuscar:txtCodigo` becomes visible and enabled.
+
+## The extraction does not continue after solving the CAPTCHA
+
+1. Confirm the query form really became usable in the browser (the HS field must be editable).
+2. Increase `SAT_CAPTCHA_TIMEOUT_SECONDS` if you need more time; the default is 300 seconds.
+3. Inspect the newest `artifacts/<code>-<section>-<timestamp>.json`. It records the current URL,
+   the frame URLs and whether the CAPTCHA, the `frmBuscar` form and the HS input were detected.
+   The matching `.png` and sanitized `.html` files show what the browser displayed.
+4. Typical causes: the landing page was loaded instead of `SAT_CONSULTA_URL`, the CAPTCHA was still
+   active, the SAT portal returned an error page, or a selector became obsolete.
+5. Nothing is lost: already stored sections stay in SQLite, the code remains in `captcha_required`
+   or `retryable_error` and `python -m sat_tariff resume` continues where it stopped.
 
 ## Export contains headers only
 
