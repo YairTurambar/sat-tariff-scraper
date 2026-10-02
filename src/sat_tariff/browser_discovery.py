@@ -124,6 +124,12 @@ def discover_system_browsers(
     return found
 
 
+def _revision_sort_key(install_dir: Path) -> tuple[int, str]:
+    revision = install_dir.name.rpartition("-")[2]
+    return (int(revision) if revision.isdigit() else -1, install_dir.name)
+
+
+
 def _managed_registry_dir(platform_name: str, environ: Mapping[str, str]) -> Path | None:
     configured = environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if configured:
@@ -160,11 +166,11 @@ def find_managed_chromium(
     key = "win32" if platform_name.startswith("win") else ("darwin" if platform_name == "darwin" else "linux")
     relatives = MANAGED_RELATIVE_EXECUTABLES[key]
     try:
-        install_dirs: Iterable[Path] = sorted(registry.glob("chromium-*"))
+        install_dirs: Iterable[Path] = sorted(registry.glob("chromium*"), key=_revision_sort_key, reverse=True)
     except OSError:  # pragma: no cover - defensive, unreadable registry
         return None
     for install_dir in install_dirs:
-        if install_dir.name.startswith("chromium_headless_shell"):
+        if not install_dir.name.startswith("chromium-"):
             continue
         for relative in relatives:
             executable = install_dir / Path(relative.replace("\\", os.sep))

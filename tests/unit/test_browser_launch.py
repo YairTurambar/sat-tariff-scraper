@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from sat_tariff import browser as browser_module
+from sat_tariff import browser_discovery as discovery_module
 from sat_tariff.browser import (
     NO_USABLE_BROWSER_MESSAGE,
     BrowserConfigurationError,
@@ -49,8 +49,8 @@ def test_defaults_enable_system_fallback(tmp_path):
 def test_explicit_executable_path_wins(monkeypatch, tmp_path):
     executable = tmp_path / "chrome"
     executable.write_text("binary", encoding="utf-8")
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: "/managed/chrome")
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: "/managed/chrome")
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
     config = make_config(tmp_path, browser_executable_path=str(executable), browser_channel="chrome")
     strategies = build_launch_strategies(config)
     assert [item.kind for item in strategies] == ["executable_path"]
@@ -67,8 +67,8 @@ def test_missing_explicit_executable_path_is_actionable(tmp_path):
 
 
 def test_channel_wins_over_managed_and_system(monkeypatch, tmp_path):
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: "/managed/chrome")
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: "/managed/chrome")
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
     config = make_config(tmp_path, browser_channel="chrome")
     strategies = build_launch_strategies(config)
     assert [item.kind for item in strategies] == ["channel"]
@@ -76,23 +76,23 @@ def test_channel_wins_over_managed_and_system(monkeypatch, tmp_path):
 
 
 def test_managed_binary_precedes_system_fallback(monkeypatch, tmp_path):
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: "/managed/chrome")
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: "/managed/chrome")
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
     strategies = build_launch_strategies(make_config(tmp_path))
     assert [item.kind for item in strategies] == ["managed", "system"]
     assert strategies[0].launch_options() == {}
 
 
 def test_system_browsers_used_when_managed_binary_is_absent(monkeypatch, tmp_path):
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
     strategies = build_launch_strategies(make_config(tmp_path))
     assert [item.kind for item in strategies] == ["system"]
 
 
 def test_no_strategies_when_fallback_disabled_and_no_managed_binary(monkeypatch, tmp_path):
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
     config = make_config(tmp_path, browser_fallback_to_system=False)
     assert build_launch_strategies(config) == []
 
@@ -151,6 +151,19 @@ def test_find_managed_chromium_detects_installed_binary(tmp_path):
         environ={"PLAYWRIGHT_BROWSERS_PATH": str(tmp_path / "ms-playwright")},
     )
     assert found == str(executable)
+
+
+def test_find_managed_chromium_prefers_newest_revision(tmp_path):
+    registry = tmp_path / "ms-playwright"
+    for revision in ("chromium-1099", "chromium-1148", "chromium_headless_shell-1148"):
+        executable = registry / revision / "chrome-linux" / "chrome"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("binary", encoding="utf-8")
+    found = find_managed_chromium(
+        platform_name="linux",
+        environ={"PLAYWRIGHT_BROWSERS_PATH": str(registry)},
+    )
+    assert found == str(registry / "chromium-1148" / "chrome-linux" / "chrome")
 
 
 def test_find_managed_chromium_returns_none_when_absent(tmp_path):
@@ -240,8 +253,8 @@ def test_start_falls_back_after_missing_managed_executable(monkeypatch, tmp_path
         ]
     )
     instance = install_fake_playwright(monkeypatch, launcher)
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: "/managed/chrome")
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: ["/usr/bin/google-chrome"])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: "/managed/chrome")
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/google-chrome"])
 
     session = BrowserSession(config=make_config(tmp_path)).start()
 
@@ -257,8 +270,8 @@ def test_start_falls_back_after_missing_managed_executable(monkeypatch, tmp_path
 def test_start_cleans_up_when_every_strategy_fails(monkeypatch, tmp_path):
     launcher = FakeLauncher([Exception("Executable doesn't exist at /managed/chrome")])
     instance = install_fake_playwright(monkeypatch, launcher)
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: "/managed/chrome")
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: "/managed/chrome")
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: [])
 
     with pytest.raises(BrowserUnavailableError) as excinfo:
         BrowserSession(config=make_config(tmp_path)).start()
@@ -270,8 +283,8 @@ def test_start_cleans_up_when_every_strategy_fails(monkeypatch, tmp_path):
 def test_start_without_strategies_does_not_start_playwright(monkeypatch, tmp_path):
     launcher = FakeLauncher([])
     instance = install_fake_playwright(monkeypatch, launcher)
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [])
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: [])
 
     with pytest.raises(BrowserUnavailableError) as excinfo:
         BrowserSession(config=make_config(tmp_path)).start()

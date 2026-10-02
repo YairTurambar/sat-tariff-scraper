@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import logging
 
-from .browser_discovery import discover_system_browsers, find_managed_chromium
+from . import browser_discovery
 from .config import AppConfig
 
 logger = logging.getLogger("sat_tariff.browser")
@@ -100,13 +100,15 @@ def build_launch_strategies(config: AppConfig) -> list[LaunchStrategy]:
         ]
 
     strategies: list[LaunchStrategy] = []
-    managed = find_managed_chromium()
+    managed = browser_discovery.find_managed_chromium()
     if managed:
         strategies.append(
             LaunchStrategy(kind="managed", description="Playwright-managed browser")
         )
     if config.browser_fallback_to_system:
-        for candidate in discover_system_browsers(extra_candidates=config.browser_candidate_paths):
+        for candidate in browser_discovery.discover_system_browsers(
+            extra_candidates=config.browser_candidate_paths
+        ):
             strategies.append(
                 LaunchStrategy(
                     kind="system",
@@ -166,13 +168,12 @@ class BrowserSession:
                 raise BrowserUnavailableError(
                     NO_USABLE_BROWSER_MESSAGE + "\nAttempts:\n" + "\n".join(f"- {item}" for item in failures)
                 )
+            self.context.set_default_navigation_timeout(self.config.navigation_timeout_ms)
+            self.context.set_default_timeout(self.config.action_timeout_ms)
+            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         except Exception:
             self.close()
             raise
-
-        self.context.set_default_navigation_timeout(self.config.navigation_timeout_ms)
-        self.context.set_default_timeout(self.config.action_timeout_ms)
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         return self
 
     def close(self) -> None:

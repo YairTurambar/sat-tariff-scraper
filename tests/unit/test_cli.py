@@ -56,16 +56,12 @@ def test_export_command_runs_offline_without_importing_playwright(monkeypatch, c
 
 
 def test_doctor_reports_usable_system_browser(monkeypatch, capsys, tmp_path):
-    from sat_tariff import browser as browser_module
+    from sat_tariff import browser_discovery as discovery_module
 
     executable = tmp_path / "chrome"
     executable.write_text("binary", encoding="utf-8")
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [str(executable)])
-    monkeypatch.setattr(
-        "sat_tariff.browser_discovery.discover_system_browsers", lambda **_: [str(executable)]
-    )
-    monkeypatch.setattr("sat_tariff.browser_discovery.find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: [str(executable)])
 
     rc = cli.main(["doctor"])
     out = capsys.readouterr().out
@@ -78,13 +74,11 @@ def test_doctor_reports_usable_system_browser(monkeypatch, capsys, tmp_path):
 
 
 def test_doctor_fails_without_any_browser(monkeypatch, capsys):
-    from sat_tariff import browser as browser_module
+    from sat_tariff import browser_discovery as discovery_module
 
     monkeypatch.setenv("SAT_BROWSER_FALLBACK_TO_SYSTEM", "false")
-    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
-    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [])
-    monkeypatch.setattr("sat_tariff.browser_discovery.discover_system_browsers", lambda **_: [])
-    monkeypatch.setattr("sat_tariff.browser_discovery.find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: [])
 
     rc = cli.main(["doctor"])
     captured = capsys.readouterr()

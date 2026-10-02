@@ -96,7 +96,7 @@ Copy `.env.example` to `.env` if you want to override defaults. Useful settings 
 - `SAT_BROWSER_CHANNEL=` (`chrome`, `msedge`, `chrome-beta`, ...)
 - `SAT_BROWSER_EXECUTABLE_PATH=`
 - `SAT_BROWSER_FALLBACK_TO_SYSTEM=true`
-- `SAT_BROWSER_CANDIDATE_PATHS=` (extra executables, separated by the OS path separator)
+- `SAT_BROWSER_CANDIDATE_PATHS=` (extra executables, separated by the OS path separator or by commas)
 - `SAT_INVALID_LINE_POLICY=skip`
 
 Without a `.env`, offline commands still work with defaults.
