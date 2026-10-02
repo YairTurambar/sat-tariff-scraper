@@ -31,7 +31,6 @@ backups/
 
 # Generated outputs
 *.xlsx
-!sat_tariff_example.xlsx
 screenshots/
 error-pages/
 artifacts/*

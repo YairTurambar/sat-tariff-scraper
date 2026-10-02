@@ -41,6 +41,9 @@ class AppConfig:
         self.output_xlsx.parent.mkdir(parents=True, exist_ok=True)
 
 
+DEFAULT_CONFIG = AppConfig()
+
+
 
 def _parse_bool(value: str, default: bool) -> bool:
     lowered = value.strip().lower()
@@ -80,24 +83,24 @@ def load_config(env_file: str | Path = ".env") -> AppConfig:
         return os.environ.get(name, file_values.get(name, default))
 
     config = AppConfig(
-        sat_base_url=get("SAT_BASE_URL", AppConfig.sat_base_url),
-        browser_type=get("SAT_BROWSER_TYPE", AppConfig.browser_type),
-        headless=_parse_bool(get("SAT_HEADLESS", str(AppConfig.headless).lower()), AppConfig.headless),
-        persistent_profile_dir=Path(get("SAT_PROFILE_DIR", str(AppConfig.persistent_profile_dir))),
-        navigation_timeout_ms=int(get("SAT_NAVIGATION_TIMEOUT_MS", str(AppConfig.navigation_timeout_ms))),
-        action_timeout_ms=int(get("SAT_ACTION_TIMEOUT_MS", str(AppConfig.action_timeout_ms))),
-        max_retries=int(get("SAT_MAX_RETRIES", str(AppConfig.max_retries))),
-        retry_backoff_factor=float(get("SAT_RETRY_BACKOFF_FACTOR", str(AppConfig.retry_backoff_factor))),
-        delay_between_codes_seconds=float(get("SAT_DELAY_BETWEEN_CODES_SECONDS", str(AppConfig.delay_between_codes_seconds))),
-        input_file=Path(get("SAT_INPUT_FILE", str(AppConfig.input_file))),
-        sqlite_db=Path(get("SAT_SQLITE_DB", str(AppConfig.sqlite_db))),
-        output_xlsx=Path(get("SAT_OUTPUT_XLSX", str(AppConfig.output_xlsx))),
-        artifacts_dir=Path(get("SAT_ARTIFACTS_DIR", str(AppConfig.artifacts_dir))),
-        logs_dir=Path(get("SAT_LOGS_DIR", str(AppConfig.logs_dir))),
-        log_level=get("SAT_LOG_LEVEL", AppConfig.log_level).upper(),
-        overwrite_output=_parse_bool(get("SAT_OVERWRITE_OUTPUT", str(AppConfig.overwrite_output).lower()), AppConfig.overwrite_output),
-        backup_output=_parse_bool(get("SAT_BACKUP_OUTPUT", str(AppConfig.backup_output).lower()), AppConfig.backup_output),
-        invalid_line_policy=get("SAT_INVALID_LINE_POLICY", AppConfig.invalid_line_policy),
-        artifact_retention_count=int(get("SAT_ARTIFACT_RETENTION_COUNT", str(AppConfig.artifact_retention_count))),
+        sat_base_url=get("SAT_BASE_URL", DEFAULT_CONFIG.sat_base_url),
+        browser_type=get("SAT_BROWSER_TYPE", DEFAULT_CONFIG.browser_type),
+        headless=_parse_bool(get("SAT_HEADLESS", str(DEFAULT_CONFIG.headless).lower()), DEFAULT_CONFIG.headless),
+        persistent_profile_dir=Path(get("SAT_PROFILE_DIR", str(DEFAULT_CONFIG.persistent_profile_dir))),
+        navigation_timeout_ms=int(get("SAT_NAVIGATION_TIMEOUT_MS", str(DEFAULT_CONFIG.navigation_timeout_ms))),
+        action_timeout_ms=int(get("SAT_ACTION_TIMEOUT_MS", str(DEFAULT_CONFIG.action_timeout_ms))),
+        max_retries=int(get("SAT_MAX_RETRIES", str(DEFAULT_CONFIG.max_retries))),
+        retry_backoff_factor=float(get("SAT_RETRY_BACKOFF_FACTOR", str(DEFAULT_CONFIG.retry_backoff_factor))),
+        delay_between_codes_seconds=float(get("SAT_DELAY_BETWEEN_CODES_SECONDS", str(DEFAULT_CONFIG.delay_between_codes_seconds))),
+        input_file=Path(get("SAT_INPUT_FILE", str(DEFAULT_CONFIG.input_file))),
+        sqlite_db=Path(get("SAT_SQLITE_DB", str(DEFAULT_CONFIG.sqlite_db))),
+        output_xlsx=Path(get("SAT_OUTPUT_XLSX", str(DEFAULT_CONFIG.output_xlsx))),
+        artifacts_dir=Path(get("SAT_ARTIFACTS_DIR", str(DEFAULT_CONFIG.artifacts_dir))),
+        logs_dir=Path(get("SAT_LOGS_DIR", str(DEFAULT_CONFIG.logs_dir))),
+        log_level=get("SAT_LOG_LEVEL", DEFAULT_CONFIG.log_level).upper(),
+        overwrite_output=_parse_bool(get("SAT_OVERWRITE_OUTPUT", str(DEFAULT_CONFIG.overwrite_output).lower()), DEFAULT_CONFIG.overwrite_output),
+        backup_output=_parse_bool(get("SAT_BACKUP_OUTPUT", str(DEFAULT_CONFIG.backup_output).lower()), DEFAULT_CONFIG.backup_output),
+        invalid_line_policy=get("SAT_INVALID_LINE_POLICY", DEFAULT_CONFIG.invalid_line_policy),
+        artifact_retention_count=int(get("SAT_ARTIFACT_RETENTION_COUNT", str(DEFAULT_CONFIG.artifact_retention_count))),
     )
     return config

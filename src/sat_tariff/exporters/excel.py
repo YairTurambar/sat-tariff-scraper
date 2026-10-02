@@ -11,6 +11,7 @@ import shutil
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
 from ..validation.output_validator import validate_workbook_structure
@@ -74,7 +75,15 @@ def _build_rights_rows(bundles: list[dict[str, Any]], dynamic_columns: list[str]
                 target[column_name] = f"{existing}\n{new_value}".strip()
             source_code = source.get("code", "")
             if source_code:
-                target["Código"] = " | ".join(filter(None, OrderedDict.fromkeys((target["Código"] + " | " + source_code).strip(" | ").split(" | ")))))
+                merged_codes = list(
+                    OrderedDict.fromkeys(
+                        filter(
+                            None,
+                            (target["Código"] + " | " + source_code).strip(" | ").split(" | "),
+                        )
+                    )
+                )
+                target["Código"] = " | ".join(merged_codes)
         rows.extend(grouped.values())
     return rows
 
@@ -162,9 +171,9 @@ def _write_nomenclature_sheet(ws, rows: list[dict[str, Any]]) -> None:
 
 
 
-def _apply_text_formats(ws) -> None:
+def _apply_text_formats(ws, header_rows: int) -> None:
     header_values = {}
-    for row_index in range(1, min(ws.max_row, 2) + 1):
+    for row_index in range(1, min(ws.max_row, header_rows) + 1):
         for col_index in range(1, ws.max_column + 1):
             value = ws.cell(row=row_index, column=col_index).value
             if value:
@@ -211,11 +220,13 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             for row in sections[sheet_name]:
                 ws.append([row.get(header, "") for header in rights_headers])
             ws.freeze_panes = "A2"
-            ws.auto_filter.ref = f"A1:{chr(64 + max(1, ws.max_column))}{max(ws.max_row, 1)}"
+            ws.auto_filter.ref = f"A1:{get_column_letter(max(1, ws.max_column))}{max(ws.max_row, 1)}"
             style_headers(ws, 1)
             style_data_cells(ws, 2)
+            header_rows = 1
         elif sheet_name == "Nomenclatura":
             _write_nomenclature_sheet(ws, sections[sheet_name])
+            header_rows = 2
         elif sheet_name == "Restricciones":
             _write_headers(ws, RESTRICTIONS_HEADERS)
             for row in sections[sheet_name]:
@@ -224,6 +235,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             ws.auto_filter.ref = f"A1:H{max(ws.max_row, 1)}"
             style_headers(ws, 1)
             style_data_cells(ws, 2)
+            header_rows = 1
         else:
             _write_headers(ws, QUOTAS_HEADERS)
             for row in sections[sheet_name]:
@@ -232,10 +244,11 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             ws.auto_filter.ref = f"A1:D{max(ws.max_row, 1)}"
             style_headers(ws, 1)
             style_data_cells(ws, 2)
+            header_rows = 1
         autosize_columns(ws)
-        _apply_text_formats(ws)
+        _apply_text_formats(ws, header_rows)
 
-    temp_path = destination.with_suffix(destination.suffix + ".tmp")
+    temp_path = destination.with_name(f"{destination.stem}.tmp{destination.suffix}")
     workbook.save(temp_path)
     load_workbook(temp_path)
     validate_workbook_structure(temp_path)

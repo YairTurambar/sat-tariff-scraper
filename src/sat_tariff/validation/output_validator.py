@@ -21,7 +21,7 @@ def validate_workbook_structure(path: str | Path) -> None:
 
     nomenclature = workbook["Nomenclatura"]
     merged_ranges = {str(cell_range) for cell_range in nomenclature.merged_cells.ranges}
-    if not any(cell_range.startswith("H1:I1") for cell_range in merged_ranges):
+    if not any(cell_range.startswith("I1:J1") for cell_range in merged_ranges):
         raise OutputValidationError("Nomenclatura sheet is missing the merged 'Unidades de medida' header.")
 
     rights_headers = [cell.value for cell in workbook["Derechos e impuestos"][1]]

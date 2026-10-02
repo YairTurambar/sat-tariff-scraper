@@ -17,7 +17,10 @@ class RedactionFilter(logging.Filter):
         if isinstance(record.msg, str):
             message = record.getMessage()
             for pattern in REDACTION_PATTERNS:
-                message = pattern.sub(lambda match: match.group(0).split(match.group(1), 1)[0] + match.group(1) + "=[REDACTED]", message) if match := pattern.search(message) else message
+                message = pattern.sub(
+                    lambda match: f"{match.group(1)}=[REDACTED]",
+                    message,
+                )
             record.msg = message
             record.args = ()
         return True
