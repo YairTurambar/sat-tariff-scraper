@@ -26,6 +26,12 @@ autoenv = [
   "python-dotenv>=1.0,<2",
 ]
 
+visual = [
+  "Pillow>=12.3,<13",
+  "numpy>=1.26,<3",
+  "scikit-image>=0.22,<1",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
@@ -39,5 +45,6 @@ pythonpath = ["src"]
 markers = [
   "integration: tests that exercise live or cross-module flows",
   "manual: tests that require manual environment setup or portal access",
+  "visual: tolerant screenshot comparison; self-skips with a reason when tools/refs are missing",
 ]
 addopts = "-m 'not integration and not manual'"

@@ -18,6 +18,7 @@ THIN_BORDER = Border(
 
 def style_headers(worksheet, header_rows: int) -> None:
     for row_index in range(1, header_rows + 1):
+        worksheet.row_dimensions[row_index].height = 22
         for cell in worksheet[row_index]:
             cell.fill = HEADER_FILL
             cell.font = HEADER_FONT
