@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-10-02T15:32:14+00:00",
+  "command": "python scripts/update_visual_baseline.py --confirm",
+  "libreoffice_version": "LibreOffice 24.2.7.2 420(Build:2)",
+  "pdftoppm_version": "pdftoppm version 24.02.0",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "python_version": "3.12.3",
+  "dpi": 200,
+  "render_pipeline": "soffice --headless --convert-to pdf -> pdftoppm -png -r 200 -> trim uniform margins",
+  "sheets": {
+    "Derechos e impuestos": {
+      "file": "derechos_e_impuestos.png",
+      "dimensions": [
+        1897,
+        96
+      ],
+      "sha256": "e0e05db6377b7a310a19b3a342e96200839695564f97fc997cd98b6827a58f8c"
+    },
+    "Nomenclatura": {
+      "file": "nomenclatura.png",
+      "dimensions": [
+        1917,
+        213
+      ],
+      "sha256": "6c2f309ef053dba12174dbbe2fe7ce6c5ac61b7ec8c62294f10fae06a6005900"
+    },
+    "Restricciones": {
+      "file": "restricciones.png",
+      "dimensions": [
+        1912,
+        164
+      ],
+      "sha256": "9211c77ab612e74f42b503168cb4af53d237ba556bead30dce9af9253859f26d"
+    },
+    "Cuotas": {
+      "file": "cuotas.png",
+      "dimensions": [
+        1908,
+        347
+      ],
+      "sha256": "e05abc333d0173fa96a8ed4b2ac143ced52bd9347070af51d82b093346f36231"
+    }
+  }
+}

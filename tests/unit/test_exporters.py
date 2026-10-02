@@ -6,6 +6,7 @@ from openpyxl import load_workbook
 from sat_tariff.config import AppConfig
 from sat_tariff.exporters.layouts import FORBIDDEN_EXPORT_COLUMNS
 from sat_tariff.exporters.excel import export_workbook
+from sat_tariff.exporters.styles import DATA_LINE_HEIGHT
 from sat_tariff.storage import Storage
 
 
@@ -97,6 +98,9 @@ def test_exporter_builds_expected_workbook_structure():
     assert rights["A1"].font.bold is True
     assert rights["A1"].font.color.rgb[-6:] == "FFFFFF"
     assert rights.row_dimensions[1].height == 22
+    # Data rows carry an explicit height so Excel and LibreOffice (whose
+    # automatic row heights differ) render the same geometry.
+    assert rights.row_dimensions[2].height == DATA_LINE_HEIGHT
     assert rights.freeze_panes == "A2"
     assert rights["A2"].number_format == "@"
     rights_row1 = [cell.value for cell in rights[1]]

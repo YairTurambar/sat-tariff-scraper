@@ -93,3 +93,120 @@ def test_prepare_print_ready_copy_sets_fit_to_page_for_every_sheet(tmp_path):
             xml = archive.read(name).decode("utf-8")
             assert 'fitToPage="1"' in xml
             assert 'orientation="landscape"' in xml
+
+
+def _write_manifest(tmp_path, overrides=None, image_bytes=b"baseline-png"):
+    import json
+
+    from compare_excel_visual import RENDER_DPI, SHEET_ORDER, sha256_of
+
+    sheets = {}
+    for sheet_name in SHEET_ORDER:
+        filename = SHEET_REFERENCE_FILES[sheet_name]
+        (tmp_path / filename).write_bytes(image_bytes)
+        sheets[sheet_name] = {
+            "file": filename,
+            "dimensions": [10, 10],
+            "sha256": sha256_of(tmp_path / filename),
+        }
+    manifest = {"dpi": RENDER_DPI, "sheets": sheets}
+    manifest.update(overrides or {})
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest
+
+
+def test_load_baseline_manifest_accepts_a_complete_baseline(tmp_path):
+    from compare_excel_visual import load_baseline_manifest
+
+    _write_manifest(tmp_path)
+
+    manifest = load_baseline_manifest(tmp_path)
+
+    assert set(manifest["sheets"]) == set(SHEET_REFERENCE_FILES)
+
+
+def test_load_baseline_manifest_reports_a_missing_baseline(tmp_path):
+    import pytest
+
+    from compare_excel_visual import BaselineUnavailable, load_baseline_manifest
+
+    with pytest.raises(BaselineUnavailable) as error:
+        load_baseline_manifest(tmp_path)
+
+    assert "update_visual_baseline.py --confirm" in str(error.value)
+
+
+def test_load_baseline_manifest_rejects_a_different_render_dpi(tmp_path):
+    import pytest
+
+    from compare_excel_visual import RENDER_DPI, BaselineUnavailable, load_baseline_manifest
+
+    _write_manifest(tmp_path, overrides={"dpi": RENDER_DPI + 50})
+
+    with pytest.raises(BaselineUnavailable) as error:
+        load_baseline_manifest(tmp_path)
+
+    assert "dpi" in str(error.value)
+
+
+def test_load_baseline_manifest_rejects_a_tampered_image(tmp_path):
+    import pytest
+
+    from compare_excel_visual import BaselineUnavailable, load_baseline_manifest
+
+    _write_manifest(tmp_path)
+    (tmp_path / SHEET_REFERENCE_FILES["Cuotas"]).write_bytes(b"tampered")
+
+    with pytest.raises(BaselineUnavailable) as error:
+        load_baseline_manifest(tmp_path)
+
+    assert "does not match its manifest hash" in str(error.value)
+
+
+def test_update_visual_baseline_requires_explicit_confirmation(tmp_path):
+    from update_visual_baseline import main
+
+    exit_code = main(["--baseline-dir", str(tmp_path)])
+
+    assert exit_code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_committed_baseline_manifest_is_consistent():
+    from compare_excel_visual import BASELINE_DIR, load_baseline_manifest
+
+    if not (BASELINE_DIR / "manifest.json").is_file():
+        import pytest
+
+        pytest.skip("No renderer baseline committed in this checkout.")
+
+    manifest = load_baseline_manifest(BASELINE_DIR)
+
+    assert manifest["dpi"] == 200
+    assert manifest["libreoffice_version"]
+    assert manifest["generated_at"]
+    assert manifest["command"].endswith("--confirm")
+
+
+def test_design_mode_validates_workbook_structure(tmp_path):
+    from compare_excel_visual import validate_workbook_against_spec
+
+    workbook_path = export_sample_workbook(tmp_path / "sample.xlsx")
+
+    validate_workbook_against_spec(workbook_path)
+
+
+def test_structure_validation_detects_a_header_color_regression(tmp_path):
+    import pytest
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+
+    from compare_excel_visual import validate_workbook_against_spec
+
+    workbook_path = export_sample_workbook(tmp_path / "sample.xlsx")
+    workbook = load_workbook(workbook_path)
+    workbook["Derechos e impuestos"]["A1"].fill = PatternFill("solid", fgColor="FF0000")
+    workbook.save(workbook_path)
+
+    with pytest.raises(ValueError, match="Header fill mismatch"):
+        validate_workbook_against_spec(workbook_path)
