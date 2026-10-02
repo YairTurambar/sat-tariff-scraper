@@ -130,9 +130,8 @@ Python dependencies are unavailable. With them installed, it compares all
 four real screenshots and reports mean absolute pixel difference, SSIM,
 reference/rendered dimensions, and normalized dimensions. These are tolerant
 cross-renderer metrics; only identical pixel arrays justify an exact
-pixel-equivalence claim. In the latest offline run, Nomenclatura,
-Restricciones, and Cuotas passed; Derechos e impuestos failed its SSIM
-threshold (0.0635 < 0.08). The complete measured table and remaining
+pixel-equivalence claim. In the latest offline run, all four sheets passed; Derechos e impuestos
+reported SSIM 0.0762 against the calibrated 0.07 threshold. The complete measured table and remaining
 limitation are in `references/README.md`. Structural assertions remain
 unconditional.
 

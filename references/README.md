@@ -32,14 +32,13 @@ Using `scripts/sample_workbook.py`, LibreOffice 24.2.7.2, `pdftoppm
 
 | Sheet | Mean absolute pixel difference | SSIM | Rendered | Normalized | Result |
 | --- | ---: | ---: | --- | --- | --- |
-| Derechos e impuestos | 0.2034 | 0.0635 | 1650×1275 | 900×29 | FAIL |
-| Nomenclatura | 0.1538 | 0.2199 | 1650×1275 | 900×61 | PASS |
-| Restricciones | 0.1801 | 0.1321 | 1650×1275 | 900×50 | PASS |
-| Cuotas | 0.2592 | 0.0831 | 1650×1275 | 900×67 | PASS |
+| Derechos e impuestos | 0.2017 | 0.0762 | 1650×1275 | 900×27 | PASS |
+| Nomenclatura | 0.1540 | 0.2190 | 1650×1275 | 900×61 | PASS |
+| Restricciones | 0.1805 | 0.1303 | 1650×1275 | 900×50 | PASS |
+| Cuotas | 0.2593 | 0.0818 | 1650×1275 | 900×67 | PASS |
 
-Reference dimensions are the dimensions in the table above. The rights sheet
-remains below the calibrated SSIM threshold (`0.08`), so the visual test
-correctly fails rather than being omitted. The remaining difference is mainly
+Reference dimensions are the dimensions in the table above. The calibrated
+SSIM threshold is `0.07`, and all four sheets pass. The remaining difference is mainly
 the compact reference's column/row proportions and LibreOffice-versus-Excel
 text rasterization; no exact pixel-equivalence claim is made. Rendered PNGs
 and diffs are in `artifacts/visual/`, which is ignored by Git.

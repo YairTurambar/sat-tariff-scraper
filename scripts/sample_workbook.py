@@ -21,14 +21,20 @@ import uuid
 
 from sat_tariff.config import AppConfig
 from sat_tariff.exporters.excel import export_workbook
+from sat_tariff.models import ProcessingState
 from sat_tariff.storage import Storage
 
-SAMPLE_CODE_FULL = "9999010101"
-SAMPLE_CODE_MINIMAL = "9999020202"
+SAMPLE_CODE_FULL = "0101210000"
+SAMPLE_CODE_MINIMAL = "0101290000"
 
 
 def _populate_storage(storage: Storage) -> None:
-    storage.upsert_code(SAMPLE_CODE_FULL, SAMPLE_CODE_FULL, last_error=None)
+    storage.upsert_code(
+        SAMPLE_CODE_FULL,
+        SAMPLE_CODE_FULL,
+        state=ProcessingState.completed,
+        last_error=None,
+    )
     storage.save_section_rows(
         SAMPLE_CODE_FULL,
         "rights",
@@ -38,7 +44,7 @@ def _populate_storage(storage: Storage) -> None:
                 "code": "DAI",
                 "description": "Derecho arancelario a la importación",
                 "additional_code": "AD1",
-                "value": "15%",
+                "value": "0%",
                 "quota_code": "CQ1",
             },
             {
@@ -46,7 +52,7 @@ def _populate_storage(storage: Storage) -> None:
                 "code": "IVA",
                 "description": "Impuesto al valor agregado",
                 "additional_code": "AD1",
-                "value": "12%",
+                "value": "Valor en Aduanas más DAI por 12%",
                 "quota_code": "CQ1",
             },
             {
@@ -69,7 +75,7 @@ def _populate_storage(storage: Storage) -> None:
                 for suffix in ("CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
             ],
         ],
-        section_status="ok",
+        section_status="Success",
     )
     storage.save_section_rows(
         SAMPLE_CODE_FULL,
@@ -96,7 +102,7 @@ def _populate_storage(storage: Storage) -> None:
                 "unit_description": "Unidad",
             },
         ],
-        section_status="ok",
+        section_status="Success",
     )
     storage.save_section_rows(
         SAMPLE_CODE_FULL,
@@ -110,16 +116,21 @@ def _populate_storage(storage: Storage) -> None:
                 "quota_code": "CQ1",
             }
         ],
-        section_status="ok",
+        section_status="Success",
     )
     storage.save_section_rows(
         SAMPLE_CODE_FULL,
         "quotas",
         [{"message": "Cuota anual de 1,000 TM dentro del Tratado de Libre Comercio - MX"}],
-        section_status="ok",
+        section_status="Success",
     )
 
-    storage.upsert_code(SAMPLE_CODE_MINIMAL, SAMPLE_CODE_MINIMAL, last_error=None)
+    storage.upsert_code(
+        SAMPLE_CODE_MINIMAL,
+        SAMPLE_CODE_MINIMAL,
+        state=ProcessingState.completed,
+        last_error=None,
+    )
     storage.save_section_rows(
         SAMPLE_CODE_MINIMAL,
         "rights",
@@ -129,11 +140,30 @@ def _populate_storage(storage: Storage) -> None:
                 "code": "DAI",
                 "description": "Derecho arancelario a la importación",
                 "additional_code": "",
-                "value": "5%",
+                "value": "10%",
                 "quota_code": "",
-            }
+            },
+            {
+                "agreement_name": "TRATAMIENTO GENERAL",
+                "code": "IVA",
+                "description": "Impuesto al valor agregado",
+                "additional_code": "",
+                "value": "Valor en Aduanas más DAI por 12%",
+                "quota_code": "",
+            },
+            *[
+                {
+                    "agreement_name": f"Tratado de Libre Comercio - {suffix}",
+                    "code": "DAI",
+                    "description": "Derecho arancelario a la importación",
+                    "additional_code": "",
+                    "value": "0%",
+                    "quota_code": "",
+                }
+                for suffix in ("MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+            ],
         ],
-        section_status="ok",
+        section_status="Success",
     )
     storage.save_section_rows(
         SAMPLE_CODE_MINIMAL,
@@ -168,6 +198,11 @@ def build_sample_bundles() -> list[dict]:
     try:
         _populate_storage(storage)
         bundles = storage.load_all_for_export()
+        for bundle in bundles:
+            bundle["state"] = "Success"
+            for section in ("rights", "nomenclature", "restrictions", "quotas"):
+                if bundle.get(section):
+                    bundle[section]["status"] = "Success"
     finally:
         storage.close()
         db_path.unlink(missing_ok=True)

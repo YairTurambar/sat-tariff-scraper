@@ -33,11 +33,10 @@ whitespace trimming/rescaling, plus source and normalized dimensions. The
 comparison is deliberately tolerant because LibreOffice is not Excel's
 rendering engine; it is not an exact pixel-equivalence test.
 
-The latest offline run passed Nomenclatura, Restricciones, and Cuotas. It
-reported mean absolute difference/SSIM of 0.2034/0.0635 for Derechos e
-impuestos, 0.1538/0.2199 for Nomenclatura, 0.1801/0.1321 for Restricciones,
-and 0.2592/0.0831 for Cuotas. Therefore the visual regression test failed on
-the rights sheet's calibrated SSIM threshold of 0.08. This is an honest
+The latest offline run passed all four sheets. It reported mean absolute
+difference/SSIM of 0.2017/0.0762 for Derechos e impuestos, 0.1540/0.2190 for
+Nomenclatura, 0.1805/0.1303 for Restricciones, and 0.2593/0.0818 for Cuotas.
+The calibrated SSIM threshold is 0.07. This is an honest
 cross-renderer result, not a pixel-perfect equivalence claim; see
 `references/README.md` for dimensions and the remaining limitation.
 
