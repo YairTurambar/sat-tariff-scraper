@@ -17,9 +17,10 @@
 
 1. Validate `HS_codes.txt`
 2. Upsert HS codes into SQLite
-3. Open the SAT portal in Playwright
-4. Pause for manual CAPTCHA resolution when needed
-5. Search each code and extract sections in order:
+3. Open the direct SAT query page (`SAT_CONSULTA_URL`) once per session in Playwright
+4. Pause for manual CAPTCHA resolution when needed, polling the DOM until the query is enabled
+5. Search each code (reusing the same session) and extract sections in order, each one submitted
+   to a temporary tab through `form.target` so the validated form stays on the main tab:
    - rights
    - nomenclature
    - restrictions

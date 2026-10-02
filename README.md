@@ -138,12 +138,43 @@ python -m sat_tariff retry-failed
 
 ## Manual CAPTCHA flow
 
-CAPTCHA handling is manual-only.
+CAPTCHA handling is manual-only, but the extraction restarts by itself.
 
 1. Run `python -m sat_tariff run`
-2. When the portal shows a CAPTCHA, solve it in the visible browser window
-3. Return to the terminal and press Enter to let the scraper poll again
-4. The scraper continues only after the DOM no longer shows the CAPTCHA input
+2. The direct query page (`SAT_CONSULTA_URL`) opens in the visible browser
+3. When the portal shows a CAPTCHA, solve **and submit** it in the browser window only
+4. Do **not** press Enter in the terminal: the application polls the DOM on its own
+5. As soon as the CAPTCHA disappears and `frmBuscar:txtCodigo` is visible and enabled,
+   the pending code is processed automatically and the rest of `HS_codes.txt` follows
+6. If the CAPTCHA reappears later, the checkpoint is kept, the same message is printed again
+   and processing continues with the pending section/code
+
+The console prints:
+
+```text
+CAPTCHA detectado; esperando resolución manual en el navegador…
+CAPTCHA resuelto; iniciando extracción automática.
+[1/N] HS 0101210000
+  Buscando código…
+  Derechos e impuestos: completado
+  Nomenclatura: completado
+  Restricciones: completado
+  Cuotas: completado/sin cuotas
+Checkpoint guardado.
+```
+
+Relevant settings (see `.env.example`):
+
+- `SAT_CONSULTA_URL`: direct JSF query page used for automation; a landing page with the
+  form inside an iframe is also supported
+- `SAT_CAPTCHA_TIMEOUT_SECONDS=300`: how long the application waits for the manual resolution
+- `SAT_CAPTCHA_POLL_INTERVAL_SECONDS=1`: DOM polling interval
+- `SAT_CAPTCHA_REQUIRE_ENTER=false`: optional legacy fallback that asks for Enter; leave it off
+
+A real run requires an interactive desktop with a visible browser. If the extraction does not
+continue, the application stores a screenshot, sanitized HTML and a JSON diagnostic (URL, frames,
+CAPTCHA/form state) under `artifacts/`, and the code stays in `captcha_required` or
+`retryable_error` so `python -m sat_tariff resume` can continue.
 
 No OCR, no external solving service, and no automatic bypass are implemented.
 

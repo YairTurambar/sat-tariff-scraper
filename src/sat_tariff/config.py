@@ -14,6 +14,7 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 @dataclass(slots=True)
 class AppConfig:
     sat_base_url: str = "https://portal.sat.gob.gt/portal/arancel-integrado/"
+    sat_consulta_url: str = "https://farm2.sat.gob.gt/saqbe-arancel-publico/aduana/arancel/consulta/consulta.jsf"
     browser_type: str = "chromium"
     browser_channel: str = ""
     browser_executable_path: str = ""
@@ -26,6 +27,9 @@ class AppConfig:
     max_retries: int = 2
     retry_backoff_factor: float = 2.0
     delay_between_codes_seconds: float = 1.0
+    captcha_timeout_seconds: float = 300.0
+    captcha_poll_interval_seconds: float = 1.0
+    captcha_require_enter: bool = False
     input_file: Path = Path("HS_codes.txt")
     sqlite_db: Path = Path("sat_tariff.db")
     output_xlsx: Path = Path("sat_tariff_example.xlsx")
@@ -97,6 +101,7 @@ def load_config(env_file: str | Path = ".env") -> AppConfig:
 
     config = AppConfig(
         sat_base_url=get("SAT_BASE_URL", DEFAULT_CONFIG.sat_base_url),
+        sat_consulta_url=get("SAT_CONSULTA_URL", DEFAULT_CONFIG.sat_consulta_url).strip(),
         browser_type=get("SAT_BROWSER_TYPE", DEFAULT_CONFIG.browser_type),
         browser_channel=get("SAT_BROWSER_CHANNEL", DEFAULT_CONFIG.browser_channel).strip(),
         browser_executable_path=get("SAT_BROWSER_EXECUTABLE_PATH", DEFAULT_CONFIG.browser_executable_path).strip(),
@@ -112,6 +117,12 @@ def load_config(env_file: str | Path = ".env") -> AppConfig:
         max_retries=int(get("SAT_MAX_RETRIES", str(DEFAULT_CONFIG.max_retries))),
         retry_backoff_factor=float(get("SAT_RETRY_BACKOFF_FACTOR", str(DEFAULT_CONFIG.retry_backoff_factor))),
         delay_between_codes_seconds=float(get("SAT_DELAY_BETWEEN_CODES_SECONDS", str(DEFAULT_CONFIG.delay_between_codes_seconds))),
+        captcha_timeout_seconds=float(get("SAT_CAPTCHA_TIMEOUT_SECONDS", str(DEFAULT_CONFIG.captcha_timeout_seconds))),
+        captcha_poll_interval_seconds=float(get("SAT_CAPTCHA_POLL_INTERVAL_SECONDS", str(DEFAULT_CONFIG.captcha_poll_interval_seconds))),
+        captcha_require_enter=_parse_bool(
+            get("SAT_CAPTCHA_REQUIRE_ENTER", str(DEFAULT_CONFIG.captcha_require_enter).lower()),
+            DEFAULT_CONFIG.captcha_require_enter,
+        ),
         input_file=Path(get("SAT_INPUT_FILE", str(DEFAULT_CONFIG.input_file))),
         sqlite_db=Path(get("SAT_SQLITE_DB", str(DEFAULT_CONFIG.sqlite_db))),
         output_xlsx=Path(get("SAT_OUTPUT_XLSX", str(DEFAULT_CONFIG.output_xlsx))),

@@ -25,6 +25,10 @@ NO_USABLE_BROWSER_MESSAGE = (
     "The Playwright-managed Chromium download is optional when a system browser is available."
 )
 
+# JSF result sections are opened by submitting the query form to a temporary
+# tab, which Chromium treats as a popup.
+CHROMIUM_LAUNCH_ARGS = ("--disable-popup-blocking",)
+
 MISSING_EXECUTABLE_HINTS = (
     "executable doesn't exist",
     "executable does not exist",
@@ -164,6 +168,7 @@ class BrowserSession:
                     self.context = browser_launcher.launch_persistent_context(
                         user_data_dir=str(self.config.persistent_profile_dir),
                         headless=self.config.headless,
+                        args=list(CHROMIUM_LAUNCH_ARGS),
                         **strategy.launch_options(),
                     )
                 except Exception as exc:
