@@ -62,12 +62,13 @@ def _rights_column_metadata(bundles: list[dict[str, Any]]) -> "OrderedDict[str, 
 def _rights_dynamic_columns(metadata: "OrderedDict[str, tuple[str, str, str]]") -> list[str]:
     ordered_names = list(metadata.keys())
     original_index = {name: index for index, name in enumerate(ordered_names)}
+    hint_order = {suffix: index for index, suffix in enumerate(DUTY_GROUP_ORDER_HINT)}
 
     def sort_key(column_name: str) -> tuple[int, int, str]:
         _code, suffix, _label = metadata[column_name]
         if suffix == "GENERAL":
             return (0, original_index[column_name], column_name)
-        hint_index = DUTY_GROUP_ORDER_HINT.index(suffix) if suffix in DUTY_GROUP_ORDER_HINT else len(DUTY_GROUP_ORDER_HINT)
+        hint_index = hint_order.get(suffix, len(DUTY_GROUP_ORDER_HINT))
         return (1 + hint_index, original_index[column_name], column_name)
 
     return sorted(ordered_names, key=sort_key)
