@@ -8,6 +8,7 @@ Nothing is downloaded at run time.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import logging
@@ -59,7 +60,12 @@ class LaunchStrategy:
         return options
 
 
-def build_launch_strategies(config: AppConfig) -> list[LaunchStrategy]:
+def build_launch_strategies(
+    config: AppConfig,
+    *,
+    managed_browser: str | None = None,
+    system_browsers: Sequence[str] | None = None,
+) -> list[LaunchStrategy]:
     """Return the ordered launch strategies for the given configuration.
 
     Precedence:
@@ -71,7 +77,8 @@ def build_launch_strategies(config: AppConfig) -> list[LaunchStrategy]:
     4. a system browser discovered automatically, when the fallback is enabled.
 
     The managed binary is only attempted when it is present on disk, so ``run``
-    never triggers a browser download.
+    never triggers a browser download. Callers that already performed the
+    discovery (such as ``doctor``) can pass the results to avoid rescanning.
     """
 
     if config.browser_executable_path:
@@ -100,15 +107,18 @@ def build_launch_strategies(config: AppConfig) -> list[LaunchStrategy]:
         ]
 
     strategies: list[LaunchStrategy] = []
-    managed = browser_discovery.find_managed_chromium()
+    managed = managed_browser if managed_browser is not None else browser_discovery.find_managed_chromium()
     if managed:
         strategies.append(
             LaunchStrategy(kind="managed", description="Playwright-managed browser")
         )
     if config.browser_fallback_to_system:
-        for candidate in browser_discovery.discover_system_browsers(
-            extra_candidates=config.browser_candidate_paths
-        ):
+        candidates = (
+            system_browsers
+            if system_browsers is not None
+            else browser_discovery.discover_system_browsers(extra_candidates=config.browser_candidate_paths)
+        )
+        for candidate in candidates:
             strategies.append(
                 LaunchStrategy(
                     kind="system",

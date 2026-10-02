@@ -116,7 +116,9 @@ def cmd_doctor(config) -> int:
         print("System browsers found: none")
 
     try:
-        strategies = build_launch_strategies(config)
+        strategies = build_launch_strategies(
+            config, managed_browser=managed, system_browsers=system_browsers
+        )
     except BrowserConfigurationError as exc:
         print(str(exc), file=sys.stderr)
         return 1
