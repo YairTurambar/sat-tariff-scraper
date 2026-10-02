@@ -38,3 +38,64 @@ def test_status_command_runs_offline_without_importing_playwright(monkeypatch, c
     assert "No HS codes stored yet." in out
     assert "playwright" not in sys.modules
     db_path.unlink(missing_ok=True)
+
+
+def test_export_command_runs_offline_without_importing_playwright(monkeypatch, capsys, tmp_path):
+    db_path = make_db_path()
+    storage = Storage(db_path)
+    storage.close()
+    monkeypatch.setenv("SAT_SQLITE_DB", str(db_path))
+    monkeypatch.setenv("SAT_OUTPUT_XLSX", str(tmp_path / "out.xlsx"))
+    sys.modules.pop("playwright", None)
+    rc = cli.main(["export"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Workbook written to" in out
+    assert "playwright" not in sys.modules
+    db_path.unlink(missing_ok=True)
+
+
+def test_doctor_reports_usable_system_browser(monkeypatch, capsys, tmp_path):
+    from sat_tariff import browser as browser_module
+
+    executable = tmp_path / "chrome"
+    executable.write_text("binary", encoding="utf-8")
+    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
+    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [str(executable)])
+    monkeypatch.setattr(
+        "sat_tariff.browser_discovery.discover_system_browsers", lambda **_: [str(executable)]
+    )
+    monkeypatch.setattr("sat_tariff.browser_discovery.find_managed_chromium", lambda **_: None)
+
+    rc = cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Python:" in out
+    assert "Playwright import: ok" in out
+    assert "not installed (no download attempted)" in out
+    assert str(executable) in out
+    assert "Strategy that would be used: system browser" in out
+
+
+def test_doctor_fails_without_any_browser(monkeypatch, capsys):
+    from sat_tariff import browser as browser_module
+
+    monkeypatch.setenv("SAT_BROWSER_FALLBACK_TO_SYSTEM", "false")
+    monkeypatch.setattr(browser_module, "find_managed_chromium", lambda: None)
+    monkeypatch.setattr(browser_module, "discover_system_browsers", lambda **_: [])
+    monkeypatch.setattr("sat_tariff.browser_discovery.discover_system_browsers", lambda **_: [])
+    monkeypatch.setattr("sat_tariff.browser_discovery.find_managed_chromium", lambda **_: None)
+
+    rc = cli.main(["doctor"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "No usable browser was found." in captured.err
+    assert "SAT_BROWSER_CHANNEL=chrome" in captured.err
+
+
+def test_doctor_reports_invalid_configured_executable(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("SAT_BROWSER_EXECUTABLE_PATH", str(tmp_path / "missing-chrome"))
+    rc = cli.main(["doctor"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "SAT_BROWSER_EXECUTABLE_PATH" in captured.err
