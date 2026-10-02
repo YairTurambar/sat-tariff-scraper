@@ -2,7 +2,9 @@ from pathlib import Path
 import uuid
 
 from sat_tariff.checkpoint import build_resume_point, next_section_for_state
-from sat_tariff.models import ProcessingState, RightsTaxesRow
+from sat_tariff.config import AppConfig
+from sat_tariff.models import HsCodeEntry, ProcessingState, RightsTaxesRow
+from sat_tariff.navigation import NavigationService
 from sat_tariff.storage import Storage
 
 
@@ -76,6 +78,38 @@ def test_resume_point_uses_processed_sections_for_retryable_error():
             storage.get_processed_sections("9999000003"),
         )
         assert resume_point.next_section == "nomenclature"
+    finally:
+        storage.close()
+        db_path.unlink(missing_ok=True)
+
+
+def test_quotas_completed_resumes_to_completed_without_reprocessing():
+    """A crash after quotas_completed but before the final completed transition
+    must not leave the code stuck forever: resuming should finalize it."""
+    db_path = make_db_path()
+    storage = Storage(db_path)
+    try:
+        storage.upsert_code("9999000004", "9999000004", ProcessingState.quotas_completed)
+        for section, row in (
+            ("rights", [RightsTaxesRow("TRATAMIENTO GENERAL", "DAI", "desc", "AD1", "5%", "CQ1")]),
+            ("nomenclature", []),
+            ("restrictions", []),
+            ("quotas", []),
+        ):
+            storage.save_section_rows("9999000004", section, row, section_status="ok")
+
+        resume_point = build_resume_point(
+            "9999000004",
+            ProcessingState.quotas_completed.value,
+            storage.get_processed_sections("9999000004"),
+        )
+        assert resume_point.next_section is None
+
+        service = NavigationService(config=AppConfig(), storage=storage, browser_session=None)
+        entry = HsCodeEntry(raw_code="9999000004", normalized_code="9999000004")
+        service.process_code(entry)
+
+        assert storage.get_code("9999000004")["state"] == ProcessingState.completed.value
     finally:
         storage.close()
         db_path.unlink(missing_ok=True)

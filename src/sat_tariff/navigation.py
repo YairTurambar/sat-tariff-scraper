@@ -115,6 +115,11 @@ class NavigationService:
         processed_sections = set() if force_restart else self.storage.get_processed_sections(entry.normalized_code)
         resume_point = build_resume_point(entry.normalized_code, state_value, processed_sections)
         if resume_point.next_section is None and not force_restart:
+            if resume_point.state == ProcessingState.quotas_completed:
+                # All four sections were already persisted in a previous run but
+                # the process crashed before the final state transition. Finalize
+                # instead of leaving the code stuck in quotas_completed forever.
+                self.storage.update_state(entry.normalized_code, ProcessingState.completed)
             return
 
         self.storage.update_state(entry.normalized_code, ProcessingState.in_progress)
