@@ -1,22 +1,20 @@
-"""Tolerant visual-regression test for the exported SAT workbook.
+"""Visual-regression tests for the exported SAT workbook (dual reference).
 
-This test is intentionally skipped (with an explicit, human-readable reason)
-whenever any precondition for a real comparison is missing:
+Two independent levels are exercised here:
 
-- LibreOffice (`soffice`) and poppler (`pdftoppm`) are not installed, or
-- the optional `visual` extra (Pillow/numpy/scikit-image) is not installed, or
-- the reference screenshots under `references/` are not present.
+1. **Design reference** (``references/*.png``): the original Excel screenshots.
+   LibreOffice is not Excel, so this comparison is tolerant and is paired with
+   exact structural assertions made through ``openpyxl``
+   (``validate_workbook_against_spec`` plus ``tests/unit/test_exporters.py``).
+2. **Renderer baseline** (``tests/visual/baselines/libreoffice/``): PNGs
+   produced by this very pipeline from the approved workbook. Both sides come
+   from the same engine, so the thresholds are strict and the test also proves
+   that a material change to the workbook is detected.
 
-When all three preconditions are satisfied, it renders a deterministic
-fixture workbook (the same one used by `scripts/compare_excel_visual.py`)
-and asserts that each sheet stays within tolerant similarity thresholds of
-its reference screenshot. See that script's module docstring for the full
-render pipeline and the rationale behind the tolerance thresholds.
-
-Structural correctness (headers, merges, styles, sheet order, number
-formats) is verified independently and unconditionally in
-`tests/unit/test_exporters.py`; this test only adds a *supplementary* visual
-signal and must never be the sole source of truth for correctness.
+Each test self-skips, with an explicit human-readable reason, whenever a
+precondition is missing (LibreOffice/poppler, the optional ``visual`` extra,
+the reference screenshots or an approved baseline). Tests never regenerate the
+baseline: use ``python scripts/update_visual_baseline.py --confirm``.
 """
 
 from __future__ import annotations
@@ -32,20 +30,34 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from compare_excel_visual import (  # noqa: E402
-    DEFAULT_MEAN_DIFF_THRESHOLD,
-    DEFAULT_SSIM_THRESHOLD,
+    BASELINE_DIR,
+    BASELINE_MANIFEST_NAME,
+    BASELINE_MEAN_DIFF_THRESHOLD,
+    BASELINE_SSIM_THRESHOLD,
+    DESIGN_MEAN_DIFF_THRESHOLD,
+    DESIGN_SSIM_THRESHOLD,
     SHEET_REFERENCE_FILES,
+    BaselineUnavailable,
+    compare_workbook_to_baseline,
     compare_workbook_to_references,
     missing_python_deps,
     missing_reference_files,
     missing_render_tools,
+    validate_workbook_against_spec,
 )
 from sample_workbook import export_sample_workbook  # noqa: E402
 
 REFERENCES_DIR = REPO_ROOT / "references"
 
+REFERENCE_DIMENSIONS = {
+    "Derechos e impuestos": (1853, 91),
+    "Nomenclatura": (1531, 124),
+    "Restricciones": (1492, 147),
+    "Cuotas": (1460, 137),
+}
 
-def _skip_reason() -> str | None:
+
+def _tooling_skip_reason() -> str | None:
     tool_gaps = missing_render_tools()
     if tool_gaps:
         return (
@@ -58,6 +70,13 @@ def _skip_reason() -> str | None:
             f"Visual comparison requires the optional 'visual' extra (missing: {', '.join(dep_gaps)}). "
             "Install with `pip install -e .[visual]`."
         )
+    return None
+
+
+def _design_skip_reason() -> str | None:
+    reason = _tooling_skip_reason()
+    if reason:
+        return reason
     ref_gaps = missing_reference_files(REFERENCES_DIR)
     if ref_gaps:
         return (
@@ -68,24 +87,95 @@ def _skip_reason() -> str | None:
     return None
 
 
+def _baseline_skip_reason() -> str | None:
+    reason = _tooling_skip_reason()
+    if reason:
+        return reason
+    if not (BASELINE_DIR / BASELINE_MANIFEST_NAME).is_file():
+        return (
+            f"No renderer baseline under {BASELINE_DIR}. Generate one explicitly with "
+            "`python scripts/update_visual_baseline.py --confirm`."
+        )
+    return None
+
+
 @pytest.mark.visual
-def test_exported_workbook_matches_reference_screenshots(tmp_path):
-    reason = _skip_reason()
+def test_design_reference_comparison_is_within_tolerant_thresholds(tmp_path):
+    """Mode A: tolerant, cross-engine comparison with the Excel screenshots."""
+    reason = _design_skip_reason()
     if reason:
         pytest.skip(reason)
 
     workbook_path = export_sample_workbook(tmp_path / "sample_workbook.xlsx")
+    # Complementary exact check: pixels across two engines cannot prove headers,
+    # column order or styles, but openpyxl can.
+    validate_workbook_against_spec(workbook_path)
+
     results = compare_workbook_to_references(workbook_path, REFERENCES_DIR, tmp_path / "visual-diagnostics")
 
     assert set(results.keys()) == set(SHEET_REFERENCE_FILES.keys())
-    assert all(
-        metrics["reference_dimensions"] in {(1853, 91), (1531, 124), (1492, 147), (1460, 137)}
-        for metrics in results.values()
-    )
+    for sheet_name, metrics in results.items():
+        assert metrics["reference_dimensions"] == REFERENCE_DIMENSIONS[sheet_name]
 
     failures = {
         sheet_name: metrics
         for sheet_name, metrics in results.items()
-        if metrics["mean_abs_diff"] > DEFAULT_MEAN_DIFF_THRESHOLD or metrics["ssim"] < DEFAULT_SSIM_THRESHOLD
+        if metrics["mean_abs_diff"] > DESIGN_MEAN_DIFF_THRESHOLD or metrics["ssim"] < DESIGN_SSIM_THRESHOLD
     }
-    assert not failures, f"Visual regression detected (see diagnostics in tmp_path/visual-diagnostics): {failures}"
+    assert not failures, f"Design-reference regression (diagnostics under {tmp_path}): {failures}"
+
+
+@pytest.mark.visual
+def test_renderer_baseline_comparison_is_strict(tmp_path):
+    """Mode B: strict, same-engine comparison with the approved baseline."""
+    reason = _baseline_skip_reason()
+    if reason:
+        pytest.skip(reason)
+
+    workbook_path = export_sample_workbook(tmp_path / "sample_workbook.xlsx")
+    try:
+        results = compare_workbook_to_baseline(workbook_path, BASELINE_DIR, tmp_path / "baseline-diagnostics")
+    except BaselineUnavailable as error:  # pragma: no cover - depends on the checkout
+        pytest.fail(str(error))
+
+    assert set(results.keys()) == set(SHEET_REFERENCE_FILES.keys())
+    failures = {
+        sheet_name: metrics
+        for sheet_name, metrics in results.items()
+        if metrics["mean_abs_diff"] > BASELINE_MEAN_DIFF_THRESHOLD or metrics["ssim"] < BASELINE_SSIM_THRESHOLD
+    }
+    assert not failures, (
+        "Renderer-baseline regression. Inspect the diffs under "
+        f"{tmp_path}/baseline-diagnostics and, only if the change is intended, run "
+        f"`python scripts/update_visual_baseline.py --confirm`: {failures}"
+    )
+
+
+@pytest.mark.visual
+def test_material_regression_fails_the_baseline_comparison(tmp_path):
+    """Negative control: a deliberate formatting regression must be detected."""
+    reason = _baseline_skip_reason()
+    if reason:
+        pytest.skip(reason)
+
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill
+
+    workbook_path = export_sample_workbook(tmp_path / "regressed_workbook.xlsx")
+    workbook = load_workbook(workbook_path)
+    worksheet = workbook["Derechos e impuestos"]
+    for cell in worksheet[1]:
+        cell.fill = PatternFill("solid", fgColor="C00000")
+    workbook.save(workbook_path)
+
+    results = compare_workbook_to_baseline(workbook_path, BASELINE_DIR, tmp_path / "negative-diagnostics")
+
+    metrics = results["Derechos e impuestos"]
+    assert (
+        metrics["mean_abs_diff"] > BASELINE_MEAN_DIFF_THRESHOLD
+        or metrics["ssim"] < BASELINE_SSIM_THRESHOLD
+    ), f"A red header row must fail the baseline comparison, but it reported {metrics}"
+    # Unrelated sheets must stay clean, so the signal is specific.
+    assert results["Cuotas"]["ssim"] >= BASELINE_SSIM_THRESHOLD
+    # The approved baseline must never be rewritten by a test run.
+    assert (BASELINE_DIR / BASELINE_MANIFEST_NAME).is_file()

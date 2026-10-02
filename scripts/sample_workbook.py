@@ -43,36 +43,30 @@ def _populate_storage(storage: Storage) -> None:
                 "agreement_name": "TRATAMIENTO GENERAL",
                 "code": "DAI",
                 "description": "Derecho arancelario a la importación",
-                "additional_code": "AD1",
+                "additional_code": "",
                 "value": "0%",
-                "quota_code": "CQ1",
+                "quota_code": "",
             },
             {
                 "agreement_name": "TRATAMIENTO GENERAL",
                 "code": "IVA",
                 "description": "Impuesto al valor agregado",
-                "additional_code": "AD1",
+                "additional_code": "",
                 "value": "Valor en Aduanas más DAI por 12%",
-                "quota_code": "CQ1",
-            },
-            {
-                "agreement_name": "Tratado de Libre Comercio - MX",
-                "code": "DAI",
-                "description": "Derecho arancelario a la importación",
-                "additional_code": "AD1",
-                "value": "0%",
-                "quota_code": "CQ1",
+                "quota_code": "",
             },
             *[
                 {
                     "agreement_name": f"Tratado de Libre Comercio - {suffix}",
                     "code": "DAI",
                     "description": "Derecho arancelario a la importación",
-                    "additional_code": "AD1",
+                    "additional_code": "",
                     "value": "0%",
-                    "quota_code": "CQ1",
+                    "quota_code": "",
                 }
-                for suffix in ("CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+                # The capture shows the first code without a ``DAI_CU`` value,
+                # so the fixture deliberately omits the CU agreement here.
+                for suffix in ("MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO")
             ],
         ],
         section_status="Success",

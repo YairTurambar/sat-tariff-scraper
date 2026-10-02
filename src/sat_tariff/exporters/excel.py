@@ -18,7 +18,7 @@ from ..config import AppConfig
 from ..extractors.rights_taxes import agreement_suffix as _agreement_suffix
 from ..validation.output_validator import validate_workbook_structure
 from .layouts import DUTY_GROUP_ORDER_HINT, FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
-from .styles import autosize_columns, style_data_cells, style_headers
+from .styles import autosize_columns, set_data_row_heights, style_data_cells, style_headers
 
 
 def _ascii_slug(value: str) -> str:
@@ -290,6 +290,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             style_data_cells(ws, 2)
             header_rows = 1
         autosize_columns(ws)
+        set_data_row_heights(ws, header_rows + 1)
         _apply_text_formats(ws, header_rows)
 
     temp_path = destination.with_name(f"{destination.stem}.tmp{destination.suffix}")
