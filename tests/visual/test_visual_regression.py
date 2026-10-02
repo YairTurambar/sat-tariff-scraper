@@ -78,6 +78,10 @@ def test_exported_workbook_matches_reference_screenshots(tmp_path):
     results = compare_workbook_to_references(workbook_path, REFERENCES_DIR, tmp_path / "visual-diagnostics")
 
     assert set(results.keys()) == set(SHEET_REFERENCE_FILES.keys())
+    assert all(
+        metrics["reference_dimensions"] in {(1853, 91), (1531, 124), (1492, 147), (1460, 137)}
+        for metrics in results.values()
+    )
 
     failures = {
         sheet_name: metrics

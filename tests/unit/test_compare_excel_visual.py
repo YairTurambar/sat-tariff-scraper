@@ -17,11 +17,13 @@ if str(REPO_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from compare_excel_visual import (  # noqa: E402
+    REAL_REFERENCE_FILE_ALIASES,
     SHEET_REFERENCE_FILES,
     _prepare_print_ready_copy,
     missing_reference_files,
     missing_render_tools,
     missing_python_deps,
+    resolve_reference_path,
 )
 from sample_workbook import export_sample_workbook  # noqa: E402
 
@@ -60,6 +62,15 @@ def test_missing_reference_files_empty_when_all_present(tmp_path):
         (tmp_path / filename).write_bytes(b"not-a-real-png")
 
     assert missing_reference_files(tmp_path) == []
+
+
+def test_real_screenshot_names_resolve_to_canonical_references(tmp_path):
+    for filename in REAL_REFERENCE_FILE_ALIASES.values():
+        (tmp_path / filename).write_bytes(b"real-reference-placeholder")
+
+    assert missing_reference_files(tmp_path) == []
+    for canonical, real_name in REAL_REFERENCE_FILE_ALIASES.items():
+        assert resolve_reference_path(tmp_path, canonical) == tmp_path / real_name
 
 
 def test_prepare_print_ready_copy_sets_fit_to_page_for_every_sheet(tmp_path):

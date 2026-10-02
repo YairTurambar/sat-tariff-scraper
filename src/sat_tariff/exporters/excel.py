@@ -181,53 +181,14 @@ def _write_rights_sheet(
     dynamic_columns: list[str],
     column_metadata: "OrderedDict[str, tuple[str, str, str]]",
 ) -> list[str]:
-    """Write the two-row grouped header (agreement group over duty-code columns).
-
-    Row 1 shows the agreement name (e.g. ``TRATAMIENTO GENERAL`` or a treaty
-    name) merged across every value column that belongs to it. Row 2 shows the
-    specific duty/tax code (e.g. ``DAI``, ``IVA``) for each value column.
-    Fixed columns (``HS_Code``, ``Código adicional``, ...) are merged
-    vertically across both header rows, matching the ``Nomenclatura`` sheet's
-    layout convention for non-grouped columns.
-    """
+    """Write the flat rights header used by the reference worksheet."""
     all_headers = RIGHTS_BASE_HEADERS + dynamic_columns + RIGHTS_TRAILING_HEADERS
-    ws.append([None] * len(all_headers))
-    row2_values = (
-        list(RIGHTS_BASE_HEADERS)
-        + [column_metadata[column_name][0] for column_name in dynamic_columns]
-        + list(RIGHTS_TRAILING_HEADERS)
-    )
-    ws.append(row2_values)
-
-    column_index = 1
-    for header in RIGHTS_BASE_HEADERS:
-        ws.cell(row=1, column=column_index, value=header)
-        ws.merge_cells(start_row=1, start_column=column_index, end_row=2, end_column=column_index)
-        column_index += 1
-
-    group_spans: "OrderedDict[str, list[int]]" = OrderedDict()
-    group_labels: dict[str, str] = {}
-    for column_name in dynamic_columns:
-        _code_label, suffix, label = column_metadata[column_name]
-        group_spans.setdefault(suffix, []).append(column_index)
-        group_labels.setdefault(suffix, label)
-        column_index += 1
-    for suffix, indices in group_spans.items():
-        start_column, end_column = min(indices), max(indices)
-        ws.cell(row=1, column=start_column, value=group_labels[suffix])
-        if start_column != end_column:
-            ws.merge_cells(start_row=1, start_column=start_column, end_row=1, end_column=end_column)
-
-    for header in RIGHTS_TRAILING_HEADERS:
-        ws.cell(row=1, column=column_index, value=header)
-        ws.merge_cells(start_row=1, start_column=column_index, end_row=2, end_column=column_index)
-        column_index += 1
-
+    ws.append(all_headers)
     for row in rows:
         ws.append([row.get(header, "") for header in all_headers])
 
-    ws.freeze_panes = "A3"
-    ws.auto_filter.ref = f"A2:{get_column_letter(max(1, len(all_headers)))}{max(ws.max_row, 2)}"
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(max(1, len(all_headers)))}{max(ws.max_row, 1)}"
     return all_headers
 
 
@@ -301,9 +262,9 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
         if sheet_name == "Derechos e impuestos":
             _assert_no_forbidden_headers(rights_headers)
             _write_rights_sheet(ws, sections[sheet_name], dynamic_rights, dynamic_rights_metadata)
-            style_headers(ws, 2)
-            style_data_cells(ws, 3)
-            header_rows = 2
+            style_headers(ws, 1)
+            style_data_cells(ws, 2)
+            header_rows = 1
         elif sheet_name == "Nomenclatura":
             _assert_no_forbidden_headers(NOMENCLATURE_HEADERS)
             _write_nomenclature_sheet(ws, sections[sheet_name])

@@ -57,6 +57,17 @@ def _populate_storage(storage: Storage) -> None:
                 "value": "0%",
                 "quota_code": "CQ1",
             },
+            *[
+                {
+                    "agreement_name": f"Tratado de Libre Comercio - {suffix}",
+                    "code": "DAI",
+                    "description": "Derecho arancelario a la importación",
+                    "additional_code": "AD1",
+                    "value": "0%",
+                    "quota_code": "CQ1",
+                }
+                for suffix in ("CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+            ],
         ],
         section_status="ok",
     )

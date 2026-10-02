@@ -98,12 +98,10 @@ Expected local screenshot filenames are documented in `references/README.md`:
 - `references/restricciones.png`
 - `references/cuotas.png`
 
-Those image files were **not** available in this environment (checked the
-filesystem, attachment store, and session database — see
-`references/README.md` for the full explanation), so no pixel-perfect
-verification against them was possible. `docs/excel-format-specification.md`
-documents exactly what was used instead and how to redo this once real
-screenshots are added.
+The four real files are present under `references/` using their original
+display names. The comparison code resolves those names to the canonical
+lowercase mapping and never compares a workbook against generated output.
+Their inspected dimensions are recorded in `references/README.md`.
 
 ## Visual comparison
 
@@ -127,13 +125,16 @@ logic runs as `tests/visual/test_visual_regression.py`:
 python -m pytest tests/visual -v
 ```
 
-That test **skips with an explicit, human-readable reason** (not a silent
-pass) whenever LibreOffice/poppler, the optional `visual` extra, or the
-`references/*.png` files are missing. It is a supplementary signal only —
-the structural assertions in `tests/unit/test_exporters.py` and
-`src/sat_tariff/validation/output_validator.py` (sheet names/order, headers,
-merges, fills, borders, number formats, freeze panes, autofilter) run
-unconditionally and are the primary source of truth.
+The test skips with an explicit reason only when local rendering tools or
+Python dependencies are unavailable. With them installed, it compares all
+four real screenshots and reports mean absolute pixel difference, SSIM,
+reference/rendered dimensions, and normalized dimensions. These are tolerant
+cross-renderer metrics; only identical pixel arrays justify an exact
+pixel-equivalence claim. In the latest offline run, Nomenclatura,
+Restricciones, and Cuotas passed; Derechos e impuestos failed its SSIM
+threshold (0.0635 < 0.08). The complete measured table and remaining
+limitation are in `references/README.md`. Structural assertions remain
+unconditional.
 
 ## Tests
 

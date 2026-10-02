@@ -1,6 +1,6 @@
 # Excel format specification
 
-## Provenance and known limitation (read this first)
+## Provenance and rendering limitation (read this first)
 
 This specification is meant to be **verifiable**: every rule below maps to an
 assertion either in `tests/unit/test_exporters.py` /
@@ -8,18 +8,13 @@ assertion either in `tests/unit/test_exporters.py` /
 `tests/visual/test_visual_regression.py` (tolerant pixel comparison,
 conditionally run — see "Visual comparison" below).
 
-**The four reference screenshots this document is supposed to be built from
-(`nomenclatura`, `cuotas`, `derechos_e_impuestos`, `restricciones`) were not
-retrievable as files or image data in the environment that wrote this
-revision.** They were referenced only as inline placeholders in the task
-description; no attachment, binary payload, or file path for them existed in
-the sandbox's filesystem, attachment store, or session database (all were
-checked). Consequently **no direct pixel inspection of the real screenshots
-took place for this revision**, and this document does not claim pixel-perfect
-fidelity to them.
+The four real reference screenshots are available under `references/`.
+Their original display names are accepted as aliases for the canonical
+lowercase names. Direct inspection confirmed PNG/RGBA format and these
+dimensions: Derechos e impuestos 1853×91, Nomenclatura 1531×124,
+Restricciones 1492×147, and Cuotas 1460×137.
 
-Instead, this specification is derived from two verifiable, evidence-based
-sources:
+This specification is derived from two verifiable, evidence-based sources:
 
 1. The project's **pre-migration legacy implementation** (`sat_scraper.py`,
    `config.py`, removed by PR #8 when the code moved to `src/sat_tariff/`),
@@ -32,13 +27,19 @@ sources:
    order, required labels like `TRATAMIENTO GENERAL`, the `Unidades de
    medida` grouping, the exact "no quotas" message).
 
-If real screenshots become available later, add them under `references/`
-using the exact filenames in `references/README.md` and:
+The visual command and test render with LibreOffice and compare against those
+four files. They report mean absolute pixel difference and SSIM after
+whitespace trimming/rescaling, plus source and normalized dimensions. The
+comparison is deliberately tolerant because LibreOffice is not Excel's
+rendering engine; it is not an exact pixel-equivalence test.
 
-- re-run `python scripts/compare_excel_visual.py` to get real pixel metrics,
-- re-inspect them against the rules below and correct any discrepancy,
-- tighten the tolerances in `scripts/compare_excel_visual.py` once a true
-  calibration baseline exists.
+The latest offline run passed Nomenclatura, Restricciones, and Cuotas. It
+reported mean absolute difference/SSIM of 0.2034/0.0635 for Derechos e
+impuestos, 0.1538/0.2199 for Nomenclatura, 0.1801/0.1321 for Restricciones,
+and 0.2592/0.0831 for Cuotas. Therefore the visual regression test failed on
+the rights sheet's calibrated SSIM threshold of 0.08. This is an honest
+cross-renderer result, not a pixel-perfect equivalence claim; see
+`references/README.md` for dimensions and the remaining limitation.
 
 ## Workbook-level rules
 
@@ -84,17 +85,10 @@ using the exact filenames in `references/README.md` and:
 
 ### 1. Derechos e impuestos
 
-Two header rows (freeze panes `A3`, autofilter starts at row 2), matching the
-`TRATAMIENTO GENERAL` / per-agreement grouping pattern used in the
-screenshot-validated legacy implementation:
-
-- **Row 1**: the agreement/treaty name. Fixed columns merge vertically across
-  rows 1-2 (so the label only visually appears once); dynamic duty/tax-code
-  columns are grouped by agreement and merged horizontally across every
-  column that shares the same agreement, e.g. a `TRATAMIENTO GENERAL` block
-  that covers both a `DAI` and an `IVA` column merges as `E1:F1`.
-- **Row 2**: for fixed columns, the same label as row 1 (hidden under the
-  merge); for dynamic columns, the specific duty/tax code (`DAI`, `IVA`, …).
+One header row (freeze panes `A2`, autofilter starts at row 1), matching the
+real screenshot. Dynamic columns retain their explicit duty/agreement names
+(`DAI_GENERAL`, `IVA_GENERAL`, `DAI_MX`, and so on); no grouped header merges
+are introduced.
 
 Column order:
 
@@ -160,10 +154,9 @@ No se han encontrado cuotas/contingentes para el inciso consultado
 See `scripts/compare_excel_visual.py` (module docstring) for the full,
 reproducible render pipeline (LibreOffice headless → PDF → `pdftoppm` →
 PNG, one page per sheet) and `tests/visual/test_visual_regression.py` for the
-pytest integration. Both self-skip with a precise, human-readable reason when
-LibreOffice/poppler, the optional `visual` extra, or `references/*.png` files
-are missing — they never silently pass or fabricate a result. See the
-project README's "Visual comparison" section for how to run them locally.
+pytest integration. Both resolve the real display-name aliases and never
+substitute generated images as references. They self-skip only when local
+rendering tools or Python dependencies are missing.
 
 The visual comparison is **supplementary**: it is not a substitute for the
 structural assertions in `test_exporters.py` and `output_validator.py`, which
