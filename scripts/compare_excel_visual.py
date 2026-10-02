@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -79,6 +80,17 @@ def missing_reference_files(references_dir: Path) -> list[str]:
     ]
 
 
+def _page_sort_key(path: Path) -> int:
+    """Sort rendered ``page-N.png`` files numerically (not lexicographically).
+
+    Lexicographic sorting would put ``page-10.png`` before ``page-2.png``; we
+    extract the numeric page suffix so ordering stays correct regardless of
+    how many sheets/pages are rendered.
+    """
+    match = re.search(r"-(\d+)\.png$", path.name)
+    return int(match.group(1)) if match else 0
+
+
 def _prepare_print_ready_copy(xlsx_path: Path, destination: Path) -> None:
     """Copy *xlsx_path* and force one-page-per-sheet so PDF pages align with sheets."""
     workbook = load_workbook(xlsx_path)
@@ -131,7 +143,7 @@ def render_workbook_to_images(xlsx_path: Path, out_dir: Path) -> dict[str, Path]
         capture_output=True,
     )
 
-    rendered_pages = sorted(out_dir.glob("page-*.png"))
+    rendered_pages = sorted(out_dir.glob("page-*.png"), key=_page_sort_key)
     if len(rendered_pages) != len(SHEET_ORDER):
         raise VisualToolingUnavailable(
             f"Expected {len(SHEET_ORDER)} rendered pages (one per sheet) but found {len(rendered_pages)}: "
