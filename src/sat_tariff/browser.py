@@ -8,7 +8,7 @@ Nothing is downloaded at run time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import logging
 
@@ -130,7 +130,7 @@ class BrowserSession:
     playwright: object | None = None
     context: object | None = None
     page: object | None = None
-    strategy: LaunchStrategy | None = field(default=None)
+    strategy: LaunchStrategy | None = None
 
     def start(self):
         try:
@@ -177,17 +177,21 @@ class BrowserSession:
         return self
 
     def close(self) -> None:
-        if self.context is not None:
-            try:
-                self.context.close()
-            finally:
-                self.context = None
-                self.page = None
-        if self.playwright is not None:
-            try:
-                self.playwright.stop()
-            finally:
-                self.playwright = None
+        try:
+            if self.context is not None:
+                try:
+                    self.context.close()
+                except Exception:
+                    logger.warning("Browser context could not be closed cleanly", exc_info=True)
+                finally:
+                    self.context = None
+                    self.page = None
+        finally:
+            if self.playwright is not None:
+                try:
+                    self.playwright.stop()
+                finally:
+                    self.playwright = None
 
     def __enter__(self):
         return self.start()

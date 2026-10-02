@@ -292,3 +292,21 @@ def test_start_without_strategies_does_not_start_playwright(monkeypatch, tmp_pat
     assert str(excinfo.value) == NO_USABLE_BROWSER_MESSAGE
     assert instance.stopped is False
     assert launcher.calls == []
+
+
+def test_close_stops_playwright_even_if_context_close_fails(monkeypatch, tmp_path):
+    class FailingContext(FakeContext):
+        def close(self):
+            raise RuntimeError("context already gone")
+
+    context = FailingContext()
+    launcher = FakeLauncher([context])
+    instance = install_fake_playwright(monkeypatch, launcher)
+    monkeypatch.setattr(discovery_module, "find_managed_chromium", lambda **_: None)
+    monkeypatch.setattr(discovery_module, "discover_system_browsers", lambda **_: ["/usr/bin/chromium"])
+
+    session = BrowserSession(config=make_config(tmp_path)).start()
+    session.close()
+
+    assert instance.stopped is True
+    assert session.context is None
