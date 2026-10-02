@@ -6,7 +6,8 @@
 - `src/sat_tariff/validation/input_validator.py` validates `HS_codes.txt`.
 - `src/sat_tariff/storage.py` persists resumable code and per-section row data in SQLite.
 - `src/sat_tariff/checkpoint.py` determines which section to process next.
-- `src/sat_tariff/browser.py` lazily imports Playwright and launches a persistent context.
+- `src/sat_tariff/browser.py` lazily imports Playwright and launches a persistent context, trying explicit path, channel, already-installed managed binary and auto-detected system browsers in that order without downloading anything.
+- `src/sat_tariff/browser_discovery.py` locates system Chrome/Edge/Chromium and the Playwright-managed binary offline.
 - `src/sat_tariff/navigation.py` coordinates browser actions, manual CAPTCHA pauses, extractors, evidence capture, and state transitions.
 - `src/sat_tariff/extractors/` contains pure HTML parsers.
 - `src/sat_tariff/exporters/` builds the styled Excel workbook from SQLite rows.

@@ -24,10 +24,66 @@ Packaged Python application for collecting SAT tariff portal data into a resumab
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
-playwright install
+playwright install  # optional when a system Chrome/Edge/Chromium is installed
 ```
 
-`playwright install` downloads browser binaries and may need to be run outside restricted CI/sandbox environments.
+`playwright install` downloads browser binaries and may need to be run outside restricted CI/sandbox
+environments. When that download is blocked or times out (the CDN redirects to
+`storage.googleapis.com`), skip it and use a browser already installed on the system — see
+[Using a system browser](#using-a-system-browser-without-downloading-chromium).
+
+## Using a system browser without downloading Chromium
+
+Check the environment first; `doctor` is offline, never opens the portal and never downloads a browser:
+
+```bash
+python -m sat_tariff doctor
+```
+
+Force Google Chrome (PowerShell):
+
+```powershell
+$env:SAT_BROWSER_CHANNEL="chrome"
+python -m sat_tariff doctor
+python -m sat_tariff run
+```
+
+Or point to the executable explicitly:
+
+```powershell
+$env:SAT_BROWSER_EXECUTABLE_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"
+python -m sat_tariff doctor
+python -m sat_tariff run
+```
+
+Microsoft Edge works as well on Windows:
+
+```powershell
+$env:SAT_BROWSER_CHANNEL="msedge"
+```
+
+Launch precedence is unambiguous:
+
+1. `SAT_BROWSER_EXECUTABLE_PATH`, when configured (a configured path that does not exist is a
+   configuration error and is never silently ignored);
+2. `SAT_BROWSER_CHANNEL`, when configured;
+3. the Playwright-managed binary, but only when it is already installed;
+4. an auto-detected system browser, when `SAT_BROWSER_FALLBACK_TO_SYSTEM=true`.
+
+The managed binary is only attempted when it is already present on disk, so `run` never triggers a
+browser download and never waits through repeated download timeouts.
+
+`PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT` only enlarges the download timeout; it does not fix a
+blocked domain. Do not disable TLS verification, firewalls or corporate controls to work around it.
+
+## GitHub Copilot cloud agent limitation
+
+The GitHub Copilot agent/app can install the project, run the offline commands and modify the code.
+A real `run` needs a **visible** browser and a human solving the CAPTCHA. If the cloud environment
+provides no interactive desktop/GUI, using a system Chrome avoids the download but still does not
+make CAPTCHA solving possible there. Perform real runs on a local machine or a remote environment
+with an interactive desktop. `SAT_HEADLESS=true` is not a workaround: it contradicts the manual
+CAPTCHA flow.
 
 ## Configuration
 
@@ -37,6 +93,10 @@ Copy `.env.example` to `.env` if you want to override defaults. Useful settings 
 - `SAT_SQLITE_DB=sat_tariff.db`
 - `SAT_OUTPUT_XLSX=sat_tariff_example.xlsx`
 - `SAT_HEADLESS=false`
+- `SAT_BROWSER_CHANNEL=` (`chrome`, `msedge`, `chrome-beta`, ...)
+- `SAT_BROWSER_EXECUTABLE_PATH=`
+- `SAT_BROWSER_FALLBACK_TO_SYSTEM=true`
+- `SAT_BROWSER_CANDIDATE_PATHS=` (extra executables, separated by the OS path separator or by commas)
 - `SAT_INVALID_LINE_POLICY=skip`
 
 Without a `.env`, offline commands still work with defaults.
@@ -58,6 +118,7 @@ Validation rules:
 python -m sat_tariff validate-input
 python -m sat_tariff status
 python -m sat_tariff export
+python -m sat_tariff doctor
 python -m sat_tariff run
 python -m sat_tariff resume
 python -m sat_tariff retry-failed
@@ -68,6 +129,9 @@ python -m sat_tariff retry-failed
 - `validate-input`: validates `HS_codes.txt` only
 - `status`: shows SQLite state counts only
 - `export`: creates `sat_tariff_example.xlsx` from SQLite, even when the DB only has headers/no rows
+- `doctor`: offline browser preflight; prints the Python version, Playwright import status, whether the
+  Playwright-managed Chromium is present, the system browsers found and the strategy that would be
+  used. It exits non-zero when no usable browser exists
 - `run`: validates input, opens Playwright, searches codes, persists section data
 - `resume`: processes unfinished codes from SQLite
 - `retry-failed`: resets retryable/CAPTCHA-blocked rows and tries them again
@@ -196,7 +260,8 @@ Integration/manual tests live under `tests/integration/` and are skipped by defa
 ## Troubleshooting basics
 
 - `Playwright is not installed`: run `pip install -e .[dev]`
-- Browser package imported but no browsers installed: run `playwright install`
+- Browser package imported but no browsers installed: run `python -m sat_tariff doctor`, then either
+  `playwright install` or set `SAT_BROWSER_CHANNEL=chrome` / `SAT_BROWSER_EXECUTABLE_PATH=...`
 - `validate-input` fails: fix empty input, >500 lines, or suspicious data depending on your chosen policy
 - `status` shows nothing: no rows have been stored yet
 - `export` creates headers only: the SQLite database does not yet contain scraped rows

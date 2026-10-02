@@ -15,6 +15,10 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 class AppConfig:
     sat_base_url: str = "https://portal.sat.gob.gt/portal/arancel-integrado/"
     browser_type: str = "chromium"
+    browser_channel: str = ""
+    browser_executable_path: str = ""
+    browser_fallback_to_system: bool = True
+    browser_candidate_paths: tuple[str, ...] = ()
     headless: bool = False
     persistent_profile_dir: Path = Path("playwright-user-data")
     navigation_timeout_ms: int = 30000
@@ -55,6 +59,15 @@ def _parse_bool(value: str, default: bool) -> bool:
 
 
 
+def _parse_path_list(value: str) -> tuple[str, ...]:
+    separators = (os.pathsep, ",")
+    parts = [value]
+    for separator in separators:
+        parts = [chunk for part in parts for chunk in part.split(separator)]
+    return tuple(part.strip() for part in parts if part.strip())
+
+
+
 def _load_optional_dotenv(env_file: Path) -> dict[str, str]:
     if not env_file.exists():
         return {}
@@ -85,6 +98,13 @@ def load_config(env_file: str | Path = ".env") -> AppConfig:
     config = AppConfig(
         sat_base_url=get("SAT_BASE_URL", DEFAULT_CONFIG.sat_base_url),
         browser_type=get("SAT_BROWSER_TYPE", DEFAULT_CONFIG.browser_type),
+        browser_channel=get("SAT_BROWSER_CHANNEL", DEFAULT_CONFIG.browser_channel).strip(),
+        browser_executable_path=get("SAT_BROWSER_EXECUTABLE_PATH", DEFAULT_CONFIG.browser_executable_path).strip(),
+        browser_fallback_to_system=_parse_bool(
+            get("SAT_BROWSER_FALLBACK_TO_SYSTEM", str(DEFAULT_CONFIG.browser_fallback_to_system).lower()),
+            DEFAULT_CONFIG.browser_fallback_to_system,
+        ),
+        browser_candidate_paths=_parse_path_list(get("SAT_BROWSER_CANDIDATE_PATHS", "")),
         headless=_parse_bool(get("SAT_HEADLESS", str(DEFAULT_CONFIG.headless).lower()), DEFAULT_CONFIG.headless),
         persistent_profile_dir=Path(get("SAT_PROFILE_DIR", str(DEFAULT_CONFIG.persistent_profile_dir))),
         navigation_timeout_ms=int(get("SAT_NAVIGATION_TIMEOUT_MS", str(DEFAULT_CONFIG.navigation_timeout_ms))),

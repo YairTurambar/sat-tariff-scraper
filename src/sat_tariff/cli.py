@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import platform
 import sys
 
 from .config import load_config
@@ -21,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate-input", help="Validate HS_codes.txt without browser dependencies")
     subparsers.add_parser("status", help="Show SQLite processing summary")
     subparsers.add_parser("export", help="Build the Excel workbook from SQLite data")
+    subparsers.add_parser("doctor", help="Check browser availability offline, without opening the portal")
     subparsers.add_parser("run", help="Validate input and process all HS codes")
     subparsers.add_parser("resume", help="Resume unfinished HS codes from SQLite state")
     subparsers.add_parser("retry-failed", help="Reset retryable/captcha failures and process them again")
@@ -82,6 +84,57 @@ def cmd_export(config) -> int:
 
 
 
+def cmd_doctor(config) -> int:
+    from .browser import NO_USABLE_BROWSER_MESSAGE, BrowserConfigurationError, build_launch_strategies
+    from .browser_discovery import discover_system_browsers, find_managed_chromium
+
+    print(f"Python: {platform.python_version()} ({sys.executable})")
+    try:
+        import playwright  # noqa: F401
+
+        try:
+            from importlib.metadata import version as package_version
+
+            version = package_version("playwright")
+        except Exception:
+            version = getattr(playwright, "__version__", "unknown")
+        print(f"Playwright import: ok (version {version})")
+    except Exception as exc:
+        print(f"Playwright import: failed ({exc})", file=sys.stderr)
+        print("Install the project dependencies with 'pip install -e .[dev]'.", file=sys.stderr)
+        return 1
+
+    managed = find_managed_chromium()
+    print(f"Playwright-managed Chromium: {managed if managed else 'not installed (no download attempted)'}")
+
+    system_browsers = discover_system_browsers(extra_candidates=config.browser_candidate_paths)
+    if system_browsers:
+        print("System browsers found:")
+        for path in system_browsers:
+            print(f"  - {path}")
+    else:
+        print("System browsers found: none")
+
+    try:
+        strategies = build_launch_strategies(
+            config, managed_browser=managed, system_browsers=system_browsers
+        )
+    except BrowserConfigurationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if not strategies:
+        print(NO_USABLE_BROWSER_MESSAGE, file=sys.stderr)
+        return 1
+
+    print(f"Strategy that would be used: {strategies[0].description}")
+    if len(strategies) > 1:
+        print(f"Fallback strategies available: {len(strategies) - 1}")
+    print("A real 'run' still needs a visible browser and manual CAPTCHA solving on an interactive desktop.")
+    return 0
+
+
+
 def _run_browser_command(config, *, resume_only: bool = False, retry_failed: bool = False) -> int:
     storage = Storage(config.sqlite_db)
     try:
@@ -126,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         "validate-input": lambda: cmd_validate_input(config),
         "status": lambda: cmd_status(config),
         "export": lambda: cmd_export(config),
+        "doctor": lambda: cmd_doctor(config),
         "run": lambda: _run_browser_command(config),
         "resume": lambda: _run_browser_command(config, resume_only=True),
         "retry-failed": lambda: _run_browser_command(config, retry_failed=True),
