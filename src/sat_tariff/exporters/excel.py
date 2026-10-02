@@ -47,22 +47,38 @@ def _base_row(bundle: dict[str, Any], section_key: str) -> dict[str, Any]:
 
 
 
-def _rights_dynamic_columns(bundles: list[dict[str, Any]]) -> list[str]:
-    ordered: OrderedDict[str, int] = OrderedDict()
+def _rights_column_metadata(bundles: list[dict[str, Any]]) -> "OrderedDict[str, tuple[str, str, str]]":
+    """Map each dynamic rights column name to (code_label, suffix, group_label).
+
+    ``group_label`` is the first full agreement name seen for that suffix
+    (e.g. ``"TRATAMIENTO GENERAL"`` or ``"Tratado de Libre Comercio - MX"``),
+    used as the merged group header above the per-code value columns.
+    """
+    metadata: "OrderedDict[str, tuple[str, str, str]]" = OrderedDict()
     for bundle in bundles:
         for row in bundle.get("rights", {}).get("rows", []):
-            export_name = f"{_ascii_slug(row.get('code', ''))}_{_agreement_suffix(row.get('agreement_name', ''))}"
-            if export_name != "_":
-                ordered.setdefault(export_name, len(ordered))
+            code_label = _ascii_slug(row.get("code", ""))
+            agreement_name = row.get("agreement_name", "")
+            suffix = _agreement_suffix(agreement_name)
+            column_name = f"{code_label}_{suffix}"
+            if column_name == "_":
+                continue
+            metadata.setdefault(column_name, (code_label, suffix, agreement_name.strip() or suffix))
+    return metadata
+
+
+
+def _rights_dynamic_columns(metadata: "OrderedDict[str, tuple[str, str, str]]") -> list[str]:
+    ordered_names = list(metadata.keys())
 
     def sort_key(column_name: str) -> tuple[int, int, str]:
-        _code, _sep, suffix = column_name.partition("_")
+        _code, suffix, _label = metadata[column_name]
         if suffix == "GENERAL":
-            return (0, ordered[column_name], column_name)
+            return (0, ordered_names.index(column_name), column_name)
         hint_index = DUTY_GROUP_ORDER_HINT.index(suffix) if suffix in DUTY_GROUP_ORDER_HINT else len(DUTY_GROUP_ORDER_HINT)
-        return (1 + hint_index, ordered[column_name], column_name)
+        return (1 + hint_index, ordered_names.index(column_name), column_name)
 
-    return sorted(ordered.keys(), key=sort_key)
+    return sorted(ordered_names, key=sort_key)
 
 
 
@@ -166,6 +182,63 @@ def _write_headers(ws, headers: list[str]) -> None:
 
 
 
+def _write_rights_sheet(
+    ws,
+    rows: list[dict[str, Any]],
+    dynamic_columns: list[str],
+    column_metadata: "OrderedDict[str, tuple[str, str, str]]",
+) -> list[str]:
+    """Write the two-row grouped header (agreement group over duty-code columns).
+
+    Row 1 shows the agreement name (e.g. ``TRATAMIENTO GENERAL`` or a treaty
+    name) merged across every value column that belongs to it. Row 2 shows the
+    specific duty/tax code (e.g. ``DAI``, ``IVA``) for each value column.
+    Fixed columns (``HS_Code``, ``Código adicional``, ...) are merged
+    vertically across both header rows, matching the ``Nomenclatura`` sheet's
+    layout convention for non-grouped columns.
+    """
+    all_headers = RIGHTS_BASE_HEADERS + dynamic_columns + RIGHTS_TRAILING_HEADERS
+    ws.append([None] * len(all_headers))
+    row2_values = (
+        list(RIGHTS_BASE_HEADERS)
+        + [column_metadata[column_name][0] for column_name in dynamic_columns]
+        + list(RIGHTS_TRAILING_HEADERS)
+    )
+    ws.append(row2_values)
+
+    column_index = 1
+    for header in RIGHTS_BASE_HEADERS:
+        ws.cell(row=1, column=column_index, value=header)
+        ws.merge_cells(start_row=1, start_column=column_index, end_row=2, end_column=column_index)
+        column_index += 1
+
+    group_spans: "OrderedDict[str, list[int]]" = OrderedDict()
+    group_labels: dict[str, str] = {}
+    for column_name in dynamic_columns:
+        _code_label, suffix, label = column_metadata[column_name]
+        group_spans.setdefault(suffix, []).append(column_index)
+        group_labels.setdefault(suffix, label)
+        column_index += 1
+    for suffix, indices in group_spans.items():
+        start_column, end_column = min(indices), max(indices)
+        ws.cell(row=1, column=start_column, value=group_labels[suffix])
+        if start_column != end_column:
+            ws.merge_cells(start_row=1, start_column=start_column, end_row=1, end_column=end_column)
+
+    for header in RIGHTS_TRAILING_HEADERS:
+        ws.cell(row=1, column=column_index, value=header)
+        ws.merge_cells(start_row=1, start_column=column_index, end_row=2, end_column=column_index)
+        column_index += 1
+
+    for row in rows:
+        ws.append([row.get(header, "") for header in all_headers])
+
+    ws.freeze_panes = "A3"
+    ws.auto_filter.ref = f"A2:{get_column_letter(max(1, len(all_headers)))}{max(ws.max_row, 2)}"
+    return all_headers
+
+
+
 def _write_nomenclature_sheet(ws, rows: list[dict[str, Any]]) -> None:
     ws.append(NOMENCLATURE_HEADERS[:-2] + ["Unidades de medida", None])
     ws.append(NOMENCLATURE_HEADERS[:-2] + ["Código", "Descripción"])
@@ -220,7 +293,8 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
     default_sheet = workbook.active
     workbook.remove(default_sheet)
 
-    dynamic_rights = _rights_dynamic_columns(bundles)
+    dynamic_rights_metadata = _rights_column_metadata(bundles)
+    dynamic_rights = _rights_dynamic_columns(dynamic_rights_metadata)
     rights_headers = RIGHTS_BASE_HEADERS + dynamic_rights + RIGHTS_TRAILING_HEADERS
     sections = {
         "Derechos e impuestos": _build_rights_rows(bundles, dynamic_rights),
@@ -233,14 +307,10 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
         ws = workbook.create_sheet(sheet_name)
         if sheet_name == "Derechos e impuestos":
             _assert_no_forbidden_headers(rights_headers)
-            _write_headers(ws, rights_headers)
-            for row in sections[sheet_name]:
-                ws.append([row.get(header, "") for header in rights_headers])
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = f"A1:{get_column_letter(max(1, ws.max_column))}{max(ws.max_row, 1)}"
-            style_headers(ws, 1)
-            style_data_cells(ws, 2)
-            header_rows = 1
+            _write_rights_sheet(ws, sections[sheet_name], dynamic_rights, dynamic_rights_metadata)
+            style_headers(ws, 2)
+            style_data_cells(ws, 3)
+            header_rows = 2
         elif sheet_name == "Nomenclatura":
             _assert_no_forbidden_headers(NOMENCLATURE_HEADERS)
             _write_nomenclature_sheet(ws, sections[sheet_name])

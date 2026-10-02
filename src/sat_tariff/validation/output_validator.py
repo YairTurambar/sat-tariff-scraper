@@ -26,6 +26,7 @@ def validate_workbook_structure(path: str | Path) -> None:
         raise OutputValidationError("Nomenclatura sheet is missing the merged 'Unidades de medida' header.")
 
     rights_headers = [cell.value for cell in workbook["Derechos e impuestos"][1]]
+    rights_row2 = [cell.value for cell in workbook["Derechos e impuestos"][2]]
     restrictions_headers = [cell.value for cell in workbook["Restricciones"][1]]
     quotas_headers = [cell.value for cell in workbook["Cuotas"][1]]
     nomenclature_headers = []
@@ -40,7 +41,7 @@ def validate_workbook_structure(path: str | Path) -> None:
     if quotas_headers[:4] != ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"]:
         raise OutputValidationError("Unexpected Cuotas headers.")
     for sheet_name, headers in {
-        "Derechos e impuestos": rights_headers,
+        "Derechos e impuestos": rights_headers + rights_row2,
         "Nomenclatura": nomenclature_headers,
         "Restricciones": restrictions_headers,
         "Cuotas": quotas_headers,

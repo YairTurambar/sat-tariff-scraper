@@ -98,7 +98,42 @@ Expected local screenshot filenames are documented in `references/README.md`:
 - `references/restricciones.png`
 - `references/cuotas.png`
 
-Those image files were **not** available in this environment, so no pixel-perfect verification was possible.
+Those image files were **not** available in this environment (checked the
+filesystem, attachment store, and session database — see
+`references/README.md` for the full explanation), so no pixel-perfect
+verification against them was possible. `docs/excel-format-specification.md`
+documents exactly what was used instead and how to redo this once real
+screenshots are added.
+
+## Visual comparison
+
+`scripts/compare_excel_visual.py` renders a deterministic fixture workbook
+(the real exporter, controlled test data — see `scripts/sample_workbook.py`)
+to PNG using LibreOffice headless + poppler, normalizes each rendered sheet
+and its matching `references/*.png` (trims whitespace, rescales to a common
+width), and reports a tolerant mean-pixel-difference and SSIM score per
+sheet:
+
+```bash
+pip install -e ".[visual]"          # Pillow, numpy, scikit-image
+sudo apt-get install -y libreoffice-calc poppler-utils  # soffice + pdftoppm
+python scripts/compare_excel_visual.py
+```
+
+Diff images are written under `artifacts/visual/` (git-ignored). The same
+logic runs as `tests/visual/test_visual_regression.py`:
+
+```bash
+python -m pytest tests/visual -v
+```
+
+That test **skips with an explicit, human-readable reason** (not a silent
+pass) whenever LibreOffice/poppler, the optional `visual` extra, or the
+`references/*.png` files are missing. It is a supplementary signal only —
+the structural assertions in `tests/unit/test_exporters.py` and
+`src/sat_tariff/validation/output_validator.py` (sheet names/order, headers,
+merges, fills, borders, number formats, freeze panes, autofilter) run
+unconditionally and are the primary source of truth.
 
 ## Tests
 
