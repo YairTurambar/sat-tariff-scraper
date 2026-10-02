@@ -237,15 +237,15 @@ def main() -> int:
 
     tool_gaps = missing_render_tools()
     if tool_gaps:
-        print(f"SKIP: missing rendering tools {tool_gaps}. Install LibreOffice and poppler-utils.")
+        print(f"SKIP: missing rendering tools {', '.join(tool_gaps)}. Install LibreOffice and poppler-utils.")
         return 2
     dep_gaps = missing_python_deps()
     if dep_gaps:
-        print(f"SKIP: missing optional Python dependencies {dep_gaps}. Install with `pip install -e .[visual]`.")
+        print(f"SKIP: missing optional Python dependencies {', '.join(dep_gaps)}. Install with `pip install -e .[visual]`.")
         return 2
     ref_gaps = missing_reference_files(args.references_dir)
     if ref_gaps:
-        print(f"SKIP: missing reference screenshots under {args.references_dir}: {ref_gaps}")
+        print(f"SKIP: missing reference screenshots under {args.references_dir}: {', '.join(ref_gaps)}")
         return 2
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

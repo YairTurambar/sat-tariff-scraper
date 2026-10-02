@@ -49,20 +49,20 @@ def _skip_reason() -> str | None:
     tool_gaps = missing_render_tools()
     if tool_gaps:
         return (
-            f"Visual comparison requires {tool_gaps} (LibreOffice + poppler-utils), "
+            f"Visual comparison requires {', '.join(tool_gaps)} (LibreOffice + poppler-utils), "
             "which are not installed in this environment."
         )
     dep_gaps = missing_python_deps()
     if dep_gaps:
         return (
-            f"Visual comparison requires the optional 'visual' extra (missing: {dep_gaps}). "
+            f"Visual comparison requires the optional 'visual' extra (missing: {', '.join(dep_gaps)}). "
             "Install with `pip install -e .[visual]`."
         )
     ref_gaps = missing_reference_files(REFERENCES_DIR)
     if ref_gaps:
         return (
             "Visual comparison requires reference screenshots that are not present in this "
-            f"checkout: {ref_gaps}. Add them under references/ (see references/README.md) to "
+            f"checkout: {', '.join(ref_gaps)}. Add them under references/ (see references/README.md) to "
             "enable this test."
         )
     return None

@@ -15,6 +15,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
+from ..extractors.rights_taxes import agreement_suffix as _agreement_suffix
 from ..validation.output_validator import validate_workbook_structure
 from .layouts import DUTY_GROUP_ORDER_HINT, FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, style_data_cells, style_headers
@@ -25,16 +26,6 @@ def _ascii_slug(value: str) -> str:
     ascii_value = normalized.encode("ascii", "ignore").decode("ascii").upper()
     slug = re.sub(r"[^A-Z0-9]+", "_", ascii_value).strip("_")
     return slug or "OTRO"
-
-
-
-def _agreement_suffix(agreement_name: str) -> str:
-    if agreement_name.strip().upper() == "TRATAMIENTO GENERAL":
-        return "GENERAL"
-    match = re.search(r"[-\u2013\u2014]\s*([A-Za-z]{2,8})\s*$", agreement_name)
-    if match:
-        return _ascii_slug(match.group(1))
-    return _ascii_slug(agreement_name)
 
 
 
