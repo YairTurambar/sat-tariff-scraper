@@ -33,12 +33,19 @@ whitespace trimming/rescaling, plus source and normalized dimensions. The
 comparison is deliberately tolerant because LibreOffice is not Excel's
 rendering engine; it is not an exact pixel-equivalence test.
 
-The latest offline run passed all four sheets. It reported mean absolute
-difference/SSIM of 0.2017/0.0762 for Derechos e impuestos, 0.1540/0.2190 for
-Nomenclatura, 0.1805/0.1303 for Restricciones, and 0.2593/0.0818 for Cuotas.
-The calibrated SSIM threshold is 0.07. This is an honest
-cross-renderer result, not a pixel-perfect equivalence claim; see
-`references/README.md` for dimensions and the remaining limitation.
+The latest offline run (200 dpi, non-destructive normalization) passed all
+four sheets and reported mean absolute difference/SSIM of 0.1124/0.4912 for
+Derechos e impuestos, 0.0973/0.5391 for Nomenclatura, 0.1179/0.4775 for
+Restricciones and 0.1295/0.5341 for Cuotas, against the previous
+0.2017/0.0762, 0.1540/0.2190, 0.1805/0.1303 and 0.2593/0.0818. The design
+thresholds were therefore *raised* to mean ≤ 0.18 and SSIM ≥ 0.35. This is an
+honest cross-renderer result, not a pixel-perfect equivalence claim; see
+`references/README.md` for dimensions and the remaining limitations.
+
+The second reference level, the LibreOffice baseline under
+`tests/visual/baselines/libreoffice/`, *is* compared pixel by pixel (measured
+mean 0.0000 / SSIM 1.0000) because both sides come from the same engine and
+configuration.
 
 ## Workbook-level rules
 
@@ -71,7 +78,8 @@ cross-renderer result, not a pixel-perfect equivalence claim; see
 | --- | --- |
 | Header fill | solid `4472C4` (the blue used throughout the pre-migration, screenshot-validated implementation) |
 | Header font | bold, white (`FFFFFF`) |
-| Header row height | 22 points |
+| Header row height | 22 points (`HEADER_ROW_HEIGHT`) |
+| Data row height | explicit, `DATA_LINE_HEIGHT` (25 points) multiplied by the estimated number of wrapped lines in the row. Never left implicit: Excel (15 pt) and LibreOffice (~12.8 pt) use different defaults, which would make the same file render with different geometry in each engine. The 25 pt value was calibrated by sweeping 20/22/24/25/26/27/28 pt and measuring the four real captures; 25 pt maximized the worst-sheet SSIM. |
 | Border (header + data) | thin, all four sides, default (black) color |
 | Header alignment | horizontal `center`, vertical `center`, `wrap_text=True` |
 | Data alignment | vertical `top`, `wrap_text=True` |
@@ -83,6 +91,13 @@ cross-renderer result, not a pixel-perfect equivalence claim; see
 ## Sheet layouts
 
 ### 1. Derechos e impuestos
+
+The fixture used by the visual comparison (`scripts/sample_workbook.py`)
+reproduces the values visible in the capture: two data rows, empty `Código
+adicional`/`Código de cuota`, and no `DAI_CU` value for the first code. The
+`Código` column still shows every duty code present in a row (`DAI | IVA`),
+which the capture does not; that content difference is asserted structurally
+instead of visually.
 
 One header row (freeze panes `A2`, autofilter starts at row 1), matching the
 real screenshot. Dynamic columns retain their explicit duty/agreement names
@@ -152,10 +167,32 @@ No se han encontrado cuotas/contingentes para el inciso consultado
 
 See `scripts/compare_excel_visual.py` (module docstring) for the full,
 reproducible render pipeline (LibreOffice headless → PDF → `pdftoppm` →
-PNG, one page per sheet) and `tests/visual/test_visual_regression.py` for the
-pytest integration. Both resolve the real display-name aliases and never
-substitute generated images as references. They self-skip only when local
-rendering tools or Python dependencies are missing.
+PNG at 200 dpi, one page per sheet), `scripts/visual_normalization.py` for the
+non-destructive normalization (RGBA flattening, uniform-margin trimming,
+proportional scaling, white padding and a bounded alignment search) and
+`tests/visual/test_visual_regression.py` for the pytest integration. Both
+resolve the real display-name aliases and never substitute generated images as
+references. They self-skip only when local rendering tools, Python
+dependencies, screenshots or the approved baseline are missing.
+
+Two modes exist and answer different questions:
+
+| Mode | Command | Reference | Thresholds |
+| --- | --- | --- | --- |
+| Design | `python scripts/compare_excel_visual.py --mode design` | `references/*.png` (Excel captures) | mean ≤ 0.18, SSIM ≥ 0.35 |
+| Baseline | `python scripts/compare_excel_visual.py --mode baseline` | `tests/visual/baselines/libreoffice/*.png` | mean ≤ 0.01, SSIM ≥ 0.98 |
+
+The baseline is regenerated only by `python scripts/update_visual_baseline.py
+--confirm`, which also writes a `manifest.json` with the LibreOffice/poppler
+versions, platform, DPI, per-sheet dimensions, SHA-256 hashes, generation date
+and the command used. A missing, incomplete, tampered or DPI-incompatible
+baseline fails with an explicit message instead of being silently rebuilt.
+
+A negative control
+(`test_material_regression_fails_the_baseline_comparison`) repaints the rights
+header red and asserts that the baseline comparison fails (measured
+mean 0.1049 / SSIM 0.8397 for that sheet, with the other three still at
+0.0000/1.0000).
 
 The visual comparison is **supplementary**: it is not a substitute for the
 structural assertions in `test_exporters.py` and `output_validator.py`, which

@@ -103,37 +103,87 @@ display names. The comparison code resolves those names to the canonical
 lowercase mapping and never compares a workbook against generated output.
 Their inspected dimensions are recorded in `references/README.md`.
 
-## Visual comparison
+## Visual comparison (dual reference)
+
+Two different questions are answered by two explicit modes:
+
+| Mode | Compares against | Engine | Tolerance | Purpose |
+| --- | --- | --- | --- | --- |
+| `design` | `references/*.png` (original Excel screenshots) | Excel capture vs LibreOffice render | tolerant | Is the layout still what a human approved? |
+| `baseline` | `tests/visual/baselines/libreoffice/*.png` | LibreOffice vs LibreOffice | strict | Did *our* output change at all? |
 
 `scripts/compare_excel_visual.py` renders a deterministic fixture workbook
-(the real exporter, controlled test data — see `scripts/sample_workbook.py`)
-to PNG using LibreOffice headless + poppler, normalizes each rendered sheet
-and its matching `references/*.png` (trims whitespace, rescales to a common
-width), and reports a tolerant mean-pixel-difference and SSIM score per
-sheet:
+(the real exporter with controlled test data — see `scripts/sample_workbook.py`)
+with LibreOffice headless → PDF → `pdftoppm` at 200 dpi, one page per sheet.
+
+Install the tooling once:
 
 ```bash
-pip install -e ".[visual]"          # Pillow, numpy, scikit-image
+pip install -e ".[visual]"                              # Pillow, numpy, scikit-image
 sudo apt-get install -y libreoffice-calc poppler-utils  # soffice + pdftoppm
-python scripts/compare_excel_visual.py
 ```
 
-Diff images are written under `artifacts/visual/` (git-ignored). The same
-logic runs as `tests/visual/test_visual_regression.py`:
+Run either mode:
+
+```bash
+python scripts/compare_excel_visual.py --mode design
+python scripts/compare_excel_visual.py --mode baseline
+```
+
+Approve/regenerate the renderer baseline explicitly (never automatic, never as
+a side effect of a test):
+
+```bash
+python scripts/update_visual_baseline.py --confirm
+```
+
+### Normalization
+
+Images are never cropped to the smaller of the pair. `scripts/visual_normalization.py`
+
+1. composites RGBA over white,
+2. trims only uniform outer margins (white or the light-grey Excel background),
+3. scales both proportionally to a shared width (aspect ratio preserved),
+4. pastes both on equally sized **white canvases** (padding instead of cropping),
+5. and runs a bounded coarse-to-fine translation search (±12 px) so different
+   outer margins do not count as differences.
+
+Every step's dimensions are reported, and normalized pairs plus diff images are
+written under `artifacts/visual/` (git-ignored).
+
+### Interpreting the metrics
+
+- **SSIM** (structural similarity, −1…1): 1.0 means structurally identical.
+  Across engines (design mode) it stays well below 1.0 even for a correct
+  sheet, because fonts, hinting and anti-aliasing differ.
+- **Mean absolute difference** (0…1): average per-channel pixel error. It is
+  the primary signal for colour/content regressions.
+
+### Measured results
+
+Design mode, real screenshots, LibreOffice 24.2.7.2 + poppler 24.02.0
+(thresholds: mean ≤ 0.18, SSIM ≥ 0.35):
+
+| Sheet | mean abs diff (before → after) | SSIM (before → after) |
+| --- | --- | --- |
+| Derechos e impuestos | 0.2017 → **0.1124** | 0.0762 → **0.4912** |
+| Nomenclatura | 0.1540 → **0.0973** | 0.2190 → **0.5391** |
+| Restricciones | 0.1805 → **0.1179** | 0.1303 → **0.4775** |
+| Cuotas | 0.2593 → **0.1295** | 0.0818 → **0.5341** |
+
+Baseline mode reports `mean=0.0000`, `SSIM=1.0000` for the four sheets, which
+*is* pixel equality against the approved LibreOffice baseline. No pixel
+equivalence is claimed against the Excel screenshots.
+
+The tests run the same code and skip, with an explicit reason, only when the
+tools, the optional dependencies, the screenshots or the baseline are missing:
 
 ```bash
 python -m pytest tests/visual -v
 ```
 
-The test skips with an explicit reason only when local rendering tools or
-Python dependencies are unavailable. With them installed, it compares all
-four real screenshots and reports mean absolute pixel difference, SSIM,
-reference/rendered dimensions, and normalized dimensions. These are tolerant
-cross-renderer metrics; only identical pixel arrays justify an exact
-pixel-equivalence claim. In the latest offline run, all four sheets passed; Derechos e impuestos
-reported SSIM 0.0762 against the calibrated 0.07 threshold. The complete measured table and remaining
-limitation are in `references/README.md`. Structural assertions remain
-unconditional.
+Structural assertions (headers, order, styles, text formats) stay
+unconditional in `tests/unit/`.
 
 ## Tests
 
