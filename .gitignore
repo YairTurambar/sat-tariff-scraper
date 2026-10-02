@@ -1,61 +1,58 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-.venv
+.build/
+build/
+dist/
+.pytest_cache/
+.coverage*
+htmlcov/
+.venv/
+venv/
 .env
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
+# Browser/session state
+playwright-user-data/
+playwright-profile/
+*.cookies.json
+*.session.json
+*.storage-state.json
 
-# Output files
-*.xlsx
-*.xls
-*.csv
-sat_tariff_data.xlsx
-output_tariffs.xlsx
-
-# Logs
+# Local application data
+sat_tariff.db
+*.sqlite
+*.sqlite3
+logs/
 *.log
-scraper.log
-*.state.json
+backups/
+*.bak
+*.backup
 
-# Chrome driver
-chromedriver
-chromedriver.exe
+# Generated outputs
+*.xlsx
+!sat_tariff_example.xlsx
+screenshots/
+error-pages/
+artifacts/*
+!artifacts/.gitkeep
+artifacts/**/*.png
+artifacts/**/*.html
+artifacts/**/*.json
+artifacts/**/*.txt
 
-# Temporary files
-.tmp/
-temp/
-*.tmp
+# Runtime folders
+.cache/
+.mypy_cache/
 
-# OS
+# OS / editors
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*~
+*.swp
+
+# Keep placeholders
+!data/.gitkeep
+!references/.gitkeep

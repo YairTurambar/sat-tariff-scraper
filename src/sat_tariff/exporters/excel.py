@@ -1,0 +1,243 @@
+"""Excel export implementation."""
+
+from __future__ import annotations
+
+from collections import OrderedDict
+from datetime import datetime, timezone
+import os
+from pathlib import Path
+import re
+import shutil
+from typing import Any
+
+from openpyxl import Workbook, load_workbook
+
+from ..config import AppConfig
+from ..validation.output_validator import validate_workbook_structure
+from .layouts import NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
+from .styles import autosize_columns, style_data_cells, style_headers
+
+
+
+def _ascii_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Z0-9]+", "_", value.upper()).strip("_")
+    return slug or "OTRO"
+
+
+
+def _agreement_suffix(agreement_name: str) -> str:
+    if agreement_name.strip().upper() == "TRATAMIENTO GENERAL":
+        return "GENERAL"
+    match = re.search(r"[-\u2013\u2014]\s*([A-Za-z]{2,8})\s*$", agreement_name)
+    if match:
+        return _ascii_slug(match.group(1))
+    return _ascii_slug(agreement_name)
+
+
+
+def _base_row(bundle: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {
+        "HS_Code": bundle["raw_code"],
+        "Status": bundle.get(section_key, {}).get("status") or bundle["state"],
+        "Overall_Status": bundle["state"],
+    }
+
+
+
+def _rights_dynamic_columns(bundles: list[dict[str, Any]]) -> list[str]:
+    ordered = OrderedDict()
+    for bundle in bundles:
+        for row in bundle.get("rights", {}).get("rows", []):
+            export_name = f"{_ascii_slug(row.get('code', ''))}_{_agreement_suffix(row.get('agreement_name', ''))}"
+            if export_name != "_":
+                ordered.setdefault(export_name, None)
+    return list(ordered.keys())
+
+
+
+def _build_rights_rows(bundles: list[dict[str, Any]], dynamic_columns: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bundle in bundles:
+        base = _base_row(bundle, "rights")
+        section_rows = bundle.get("rights", {}).get("rows", [])
+        if not section_rows:
+            rows.append({**base, "Código": "", **{column: "" for column in dynamic_columns}, "Código adicional": "", "Código de cuota": ""})
+            continue
+        grouped: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        for source in section_rows:
+            key = (source.get("additional_code", ""), source.get("quota_code", ""))
+            target = grouped.setdefault(key, {**base, "Código": "", **{column: "" for column in dynamic_columns}, "Código adicional": key[0], "Código de cuota": key[1]})
+            column_name = f"{_ascii_slug(source.get('code', ''))}_{_agreement_suffix(source.get('agreement_name', ''))}"
+            existing = target.get(column_name, "")
+            new_value = source.get("value", "")
+            if new_value:
+                target[column_name] = f"{existing}\n{new_value}".strip()
+            source_code = source.get("code", "")
+            if source_code:
+                target["Código"] = " | ".join(filter(None, OrderedDict.fromkeys((target["Código"] + " | " + source_code).strip(" | ").split(" | ")))))
+        rows.extend(grouped.values())
+    return rows
+
+
+
+def _build_nomenclature_rows(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bundle in bundles:
+        base = _base_row(bundle, "nomenclature")
+        section_rows = bundle.get("nomenclature", {}).get("rows", [])
+        scalars = {"Sección": "", "Capítulo:": "", "Fecha inicio de vigencia:": "", "Fecha fin de vigencia:": "", "Códigos adicionales": ""}
+        units: list[tuple[str, str]] = []
+        for record in section_rows:
+            scalars["Sección"] = scalars["Sección"] or record.get("section", "")
+            scalars["Capítulo:"] = scalars["Capítulo:"] or record.get("chapter", "")
+            scalars["Fecha inicio de vigencia:"] = scalars["Fecha inicio de vigencia:"] or record.get("effective_from_raw", "")
+            scalars["Fecha fin de vigencia:"] = scalars["Fecha fin de vigencia:"] or record.get("effective_to_raw", "")
+            scalars["Códigos adicionales"] = scalars["Códigos adicionales"] or record.get("additional_codes_text", "")
+            if record.get("record_type") == "unit":
+                units.append((record.get("unit_code", ""), record.get("unit_description", "")))
+        shared = {**base, **scalars}
+        if not units:
+            rows.append({**shared, "Código": "", "Descripción": ""})
+        else:
+            for code, description in units:
+                rows.append({**shared, "Código": code, "Descripción": description})
+    return rows
+
+
+
+def _build_restrictions_rows(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bundle in bundles:
+        base = _base_row(bundle, "restrictions")
+        section_rows = bundle.get("restrictions", {}).get("rows", [])
+        if not section_rows:
+            rows.append({**base, "Código": "", "Descripción": "", "Código adicional": "", "Valor": "", "Código de cuota": ""})
+            continue
+        for record in section_rows:
+            rows.append({
+                **base,
+                "Código": record.get("code", ""),
+                "Descripción": record.get("description", ""),
+                "Código adicional": record.get("additional_code", ""),
+                "Valor": record.get("value", ""),
+                "Código de cuota": record.get("quota_code", ""),
+            })
+    return rows
+
+
+
+def _build_quotas_rows(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bundle in bundles:
+        base = _base_row(bundle, "quotas")
+        messages = [record.get("message", "") for record in bundle.get("quotas", {}).get("rows", []) if record.get("message")]
+        rows.append({**base, "TRATAMIENTO GENERAL": "\n".join(messages)})
+    return rows
+
+
+
+def _write_headers(ws, headers: list[str]) -> None:
+    ws.append(headers)
+
+
+
+def _write_nomenclature_sheet(ws, rows: list[dict[str, Any]]) -> None:
+    ws.append(NOMENCLATURE_HEADERS[:-2] + ["Unidades de medida", None])
+    ws.append(NOMENCLATURE_HEADERS[:-2] + ["Código", "Descripción"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=1)
+    ws.merge_cells(start_row=1, start_column=2, end_row=2, end_column=2)
+    ws.merge_cells(start_row=1, start_column=3, end_row=2, end_column=3)
+    ws.merge_cells(start_row=1, start_column=4, end_row=2, end_column=4)
+    ws.merge_cells(start_row=1, start_column=5, end_row=2, end_column=5)
+    ws.merge_cells(start_row=1, start_column=6, end_row=2, end_column=6)
+    ws.merge_cells(start_row=1, start_column=7, end_row=2, end_column=7)
+    ws.merge_cells(start_row=1, start_column=8, end_row=2, end_column=8)
+    ws.merge_cells(start_row=1, start_column=9, end_row=1, end_column=10)
+    for row in rows:
+        ws.append([row.get(header, "") for header in NOMENCLATURE_HEADERS])
+    ws.freeze_panes = "A3"
+    ws.auto_filter.ref = f"A2:J{max(ws.max_row, 2)}"
+    style_headers(ws, 2)
+    style_data_cells(ws, 3)
+
+
+
+def _apply_text_formats(ws) -> None:
+    header_values = {}
+    for row_index in range(1, min(ws.max_row, 2) + 1):
+        for col_index in range(1, ws.max_column + 1):
+            value = ws.cell(row=row_index, column=col_index).value
+            if value:
+                header_values[col_index] = value
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+        for cell in row:
+            header = header_values.get(cell.column)
+            if header in TEXT_COLUMNS:
+                cell.number_format = "@"
+
+
+
+def _backup_existing(destination: Path) -> None:
+    backup_dir = destination.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    shutil.copy2(destination, backup_dir / f"{destination.stem}-{timestamp}{destination.suffix}")
+
+
+
+def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_path: str | Path | None = None) -> Path:
+    destination = Path(output_path or config.output_xlsx)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and config.backup_output:
+        _backup_existing(destination)
+
+    workbook = Workbook()
+    default_sheet = workbook.active
+    workbook.remove(default_sheet)
+
+    dynamic_rights = _rights_dynamic_columns(bundles)
+    rights_headers = RIGHTS_BASE_HEADERS + dynamic_rights + RIGHTS_TRAILING_HEADERS
+    sections = {
+        "Derechos e impuestos": _build_rights_rows(bundles, dynamic_rights),
+        "Nomenclatura": _build_nomenclature_rows(bundles),
+        "Restricciones": _build_restrictions_rows(bundles),
+        "Cuotas": _build_quotas_rows(bundles),
+    }
+
+    for sheet_name in SHEET_ORDER:
+        ws = workbook.create_sheet(sheet_name)
+        if sheet_name == "Derechos e impuestos":
+            _write_headers(ws, rights_headers)
+            for row in sections[sheet_name]:
+                ws.append([row.get(header, "") for header in rights_headers])
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:{chr(64 + max(1, ws.max_column))}{max(ws.max_row, 1)}"
+            style_headers(ws, 1)
+            style_data_cells(ws, 2)
+        elif sheet_name == "Nomenclatura":
+            _write_nomenclature_sheet(ws, sections[sheet_name])
+        elif sheet_name == "Restricciones":
+            _write_headers(ws, RESTRICTIONS_HEADERS)
+            for row in sections[sheet_name]:
+                ws.append([row.get(header, "") for header in RESTRICTIONS_HEADERS])
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:H{max(ws.max_row, 1)}"
+            style_headers(ws, 1)
+            style_data_cells(ws, 2)
+        else:
+            _write_headers(ws, QUOTAS_HEADERS)
+            for row in sections[sheet_name]:
+                ws.append([row.get(header, "") for header in QUOTAS_HEADERS])
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:D{max(ws.max_row, 1)}"
+            style_headers(ws, 1)
+            style_data_cells(ws, 2)
+        autosize_columns(ws)
+        _apply_text_formats(ws)
+
+    temp_path = destination.with_suffix(destination.suffix + ".tmp")
+    workbook.save(temp_path)
+    load_workbook(temp_path)
+    validate_workbook_structure(temp_path)
+    os.replace(temp_path, destination)
+    return destination
