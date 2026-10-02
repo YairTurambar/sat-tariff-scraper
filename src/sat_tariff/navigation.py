@@ -112,7 +112,8 @@ class NavigationService:
             self.storage.upsert_code(entry.normalized_code, entry.raw_code, ProcessingState.pending)
             row = self.storage.get_code(entry.normalized_code)
         state_value = ProcessingState.pending.value if force_restart else row["state"]
-        resume_point = build_resume_point(entry.normalized_code, state_value)
+        processed_sections = set() if force_restart else self.storage.get_processed_sections(entry.normalized_code)
+        resume_point = build_resume_point(entry.normalized_code, state_value, processed_sections)
         if resume_point.next_section is None and not force_restart:
             return
 

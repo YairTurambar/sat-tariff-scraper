@@ -32,6 +32,28 @@ def next_section_for_state(state: ProcessingState) -> str | None:
     return mapping[state]
 
 
-def build_resume_point(code: str, state_value: str) -> ResumePoint:
+def next_section_from_processed_sections(
+    state: ProcessingState,
+    processed_sections: set[str] | None = None,
+) -> str | None:
+    if state in {ProcessingState.completed, ProcessingState.permanent_error, ProcessingState.quotas_completed}:
+        return None
+    if processed_sections:
+        for section in SECTION_SEQUENCE:
+            if section not in processed_sections:
+                return section
+        return None
+    return next_section_for_state(state)
+
+
+def build_resume_point(
+    code: str,
+    state_value: str,
+    processed_sections: set[str] | None = None,
+) -> ResumePoint:
     state = ProcessingState(state_value)
-    return ResumePoint(code=code, state=state, next_section=next_section_for_state(state))
+    return ResumePoint(
+        code=code,
+        state=state,
+        next_section=next_section_from_processed_sections(state, processed_sections),
+    )

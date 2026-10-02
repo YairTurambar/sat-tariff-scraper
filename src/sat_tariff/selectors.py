@@ -52,4 +52,10 @@ class SelectorBundle:
         return self.page.locator("input[type='submit']").first
 
     def section_trigger(self, label: str):
-        return self.page.get_by_role("button", name=label).or_(self.page.get_by_text(label, exact=True))
+        role_locator = self.page.get_by_role("button", name=label)
+        if role_locator.count() > 0:
+            return role_locator.first
+        text_locator = self.page.get_by_text(label, exact=True)
+        if text_locator.count() > 0:
+            return text_locator.first
+        return self.page.locator(f"text={label}").first

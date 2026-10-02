@@ -57,3 +57,25 @@ def test_transaction_rolls_back_on_error():
 def test_completed_and_permanent_error_have_no_next_section():
     assert next_section_for_state(ProcessingState.completed) is None
     assert next_section_for_state(ProcessingState.permanent_error) is None
+
+
+def test_resume_point_uses_processed_sections_for_retryable_error():
+    db_path = make_db_path()
+    storage = Storage(db_path)
+    try:
+        storage.upsert_code("9999000003", "9999000003", ProcessingState.retryable_error)
+        storage.save_section_rows(
+            "9999000003",
+            "rights",
+            [RightsTaxesRow("TRATAMIENTO GENERAL", "DAI", "desc", "AD1", "5%", "CQ1")],
+            section_status="ok",
+        )
+        resume_point = build_resume_point(
+            "9999000003",
+            ProcessingState.retryable_error.value,
+            storage.get_processed_sections("9999000003"),
+        )
+        assert resume_point.next_section == "nomenclature"
+    finally:
+        storage.close()
+        db_path.unlink(missing_ok=True)

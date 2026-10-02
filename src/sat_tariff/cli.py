@@ -92,7 +92,9 @@ def _run_browser_command(config, *, resume_only: bool = False, retry_failed: boo
         if resume_only or retry_failed:
             resumable = storage.get_codes_to_resume()
             entries = [by_code[row["code"]] for row in resumable if row["code"] in by_code]
-        from .browser import BrowserUnavailableError
+        if not entries:
+            print("Processed 0 HS codes.")
+            return 0
         from .navigation import run_navigation
 
         run_navigation(entries, config, storage, force_restart=False)

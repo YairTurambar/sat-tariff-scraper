@@ -194,6 +194,17 @@ class Storage:
             (ProcessingState.completed.value, ProcessingState.permanent_error.value),
         ).fetchall()
 
+    def get_processed_sections(self, code: str) -> set[str]:
+        processed: set[str] = set()
+        for section, table_name in SECTION_TABLES.items():
+            row = self.connection.execute(
+                f"SELECT 1 FROM {table_name} WHERE code = ? LIMIT 1",
+                (code,),
+            ).fetchone()
+            if row is not None:
+                processed.add(section)
+        return processed
+
     def get_code(self, code: str) -> sqlite3.Row | None:
         return self.connection.execute(
             "SELECT code, raw_code, state, attempts, last_error, created_at, updated_at FROM hs_codes WHERE code = ?",
