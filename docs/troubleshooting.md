@@ -78,6 +78,44 @@ restarts the extraction by itself when `frmBuscar:txtCodigo` becomes visible and
 5. Nothing is lost: already stored sections stay in SQLite, the code remains in `captcha_required`
    or `retryable_error` and `python -m sat_tariff resume` continues where it stopped.
 
+## `export` exits with code 3 / warnings about `Tabla 14`, `Tabla 17`
+
+**Root cause**: an older version of the extractor fell back to the position of the table in the HTML
+(`Tabla N`) when it could not find a visible title, and persisted that label as `agreement_name`.
+A table number is not a trade agreement, so the exporter cannot rebuild the real agreement and the
+rate would otherwise be dropped silently.
+
+**How to identify a contaminated database**:
+
+```bash
+python -m sat_tariff repair-rights --dry-run
+```
+
+It prints every HS code and positional label found in `rights_taxes_rows`. `python -m sat_tariff
+export` reports the same codes on stderr and exits with code `3`.
+
+**How to repair it**:
+
+```bash
+python -m sat_tariff repair-rights   # deletes only the corrupted rights rows and reopens checkpoints
+python -m sat_tariff resume          # re-extracts the rights section from the portal
+python -m sat_tariff export          # must now exit 0
+```
+
+Nomenclature, restrictions and quotas rows are untouched by the repair.
+
+**How to verify the result**: the first row of the `Derechos e impuestos` sheet must show
+`DAI_GENERAL`, `IVA_GENERAL` and one semantic column per agreement (`DAI_BZ`, `DAI_MX`, …). No
+`DAI_TABLA_*` or `IVA_TABLA_*` header is accepted; `validate_workbook_structure()` rejects the
+workbook if one appears.
+
+## A section is announced as "incompleto"
+
+`parse_rights_taxes()` could not resolve the official agreement name of one of the rates tables and
+refused to store a positional identity. The message contains the duty codes and an HTML snippet as
+evidence. Re-run the section (`python -m sat_tariff resume`); if it persists, the portal markup
+changed and `resolve_rights_table_agreement_name()` needs a new structural strategy.
+
 ## Export contains headers only
 
 The SQLite database has no stored rows yet, or only empty section data.

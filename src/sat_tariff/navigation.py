@@ -420,7 +420,13 @@ class NavigationService:
                 result = SECTION_PARSERS[section](html)
                 self.storage.save_section_rows(entry.normalized_code, section, result.rows, section_status=result.status)
                 self.storage.update_state(entry.normalized_code, SECTION_PROGRESS[section])
-                outcome = "sin cuotas" if getattr(result, "status", "") == "no_quotas" else "completado"
+                status = getattr(result, "status", "")
+                if status == "no_quotas":
+                    outcome = "sin cuotas"
+                elif status == "incomplete":
+                    outcome = f"incompleto ({getattr(result, 'message', '') or 'identidad no resuelta'})"
+                else:
+                    outcome = "completado"
                 self.announce(f"  {label}: {outcome}")
             except Exception as exc:
                 self._handle_failure(entry.normalized_code, section, exc)

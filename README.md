@@ -118,6 +118,7 @@ Validation rules:
 python -m sat_tariff validate-input
 python -m sat_tariff status
 python -m sat_tariff export
+python -m sat_tariff repair-rights
 python -m sat_tariff doctor
 python -m sat_tariff run
 python -m sat_tariff resume
@@ -128,7 +129,13 @@ python -m sat_tariff retry-failed
 
 - `validate-input`: validates `HS_codes.txt` only
 - `status`: shows SQLite state counts only
-- `export`: creates `sat_tariff_example.xlsx` from SQLite, even when the DB only has headers/no rows
+- `export`: creates `sat_tariff_example.xlsx` from SQLite, even when the DB only has headers/no rows.
+  It exits with code `3` when the database still holds rates saved with a positional label
+  (`Tabla 14`, `Tabla 17`, …), because those rows cannot be attributed to a real agreement and are
+  therefore omitted from the workbook
+- `repair-rights`: lists the HS codes whose `rights` rows carry a positional label, deletes **only**
+  those `rights_taxes_rows` and reopens their checkpoint so `resume` re-extracts the section.
+  Nomenclature, restrictions and quotas rows are preserved. Use `--dry-run` to inspect first
 - `doctor`: offline browser preflight; prints the Python version, Playwright import status, whether the
   Playwright-managed Chromium is present, the system browsers found and the strategy that would be
   used. It exits non-zero when no usable browser exists
@@ -183,6 +190,30 @@ No OCR, no external solving service, and no automatic bypass are implemented.
 - Scrape progress is stored in `sat_tariff.db`
 - Per-section raw rows are stored so Excel can be regenerated without re-scraping
 - Existing output workbooks are backed up before overwrite when `SAT_BACKUP_OUTPUT=true`
+
+### Agreement identity in `Derechos e impuestos`
+
+Each rate keeps the official agreement name from the SAT HTML all the way to SQLite and Excel:
+`TRATAMIENTO GENERAL` becomes `DAI_GENERAL`/`IVA_GENERAL`, the Belize agreement becomes `DAI_BZ`,
+the Mexico treaty becomes `DAI_MX`, and so on. Table numbers (`Tabla 14`, `Tabla 17`, …) describe a
+position in the HTML document and **never** identify an agreement, so they are never stored and
+never become columns.
+
+### Repairing a database scraped with an older version
+
+Databases created before this fix may contain `agreement_name="Tabla 14"`. The real name cannot be
+reconstructed from a table number (SQLite only keeps the parsed rows, not the source HTML), so those
+rows must be re-extracted:
+
+```bash
+python -m sat_tariff repair-rights --dry-run   # lists the affected HS codes
+python -m sat_tariff repair-rights             # deletes only their rights rows
+python -m sat_tariff resume                    # re-extracts them from the portal
+python -m sat_tariff export                    # exits 0 when no positional label remains
+```
+
+Verify the final headers of the `Derechos e impuestos` sheet: they must contain `DAI_GENERAL`,
+`IVA_GENERAL` and one `DAI_XX` column per agreement, and no `DAI_TABLA_*`/`IVA_TABLA_*` column.
 
 ## Reference screenshots
 
