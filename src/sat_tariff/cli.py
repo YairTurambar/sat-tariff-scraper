@@ -8,7 +8,8 @@ import platform
 import sys
 
 from .config import load_config
-from .exporters.excel import export_workbook
+from .extractors.rights_taxes import is_positional_identity
+from .exporters.excel import collect_positional_rights_issues, export_workbook
 from .models import ProcessingState
 from .storage import Storage
 from .validation.input_validator import InputValidationError, validate_hs_code_file
@@ -22,6 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate-input", help="Validate HS_codes.txt without browser dependencies")
     subparsers.add_parser("status", help="Show SQLite processing summary")
     subparsers.add_parser("export", help="Build the Excel workbook from SQLite data")
+    repair_parser = subparsers.add_parser(
+        "repair-rights",
+        help="Delete rights rows stored with a positional label ('Tabla N') and reopen their checkpoint",
+    )
+    repair_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report the affected HS codes without modifying SQLite",
+    )
     subparsers.add_parser("doctor", help="Check browser availability offline, without opening the portal")
     subparsers.add_parser("run", help="Validate input and process all HS codes")
     subparsers.add_parser("resume", help="Resume unfinished HS codes from SQLite state")
@@ -78,8 +88,58 @@ def cmd_export(config) -> int:
         bundles = storage.load_all_for_export()
     finally:
         storage.close()
+    issues = collect_positional_rights_issues(bundles)
     path = export_workbook(bundles, config)
     print(f"Workbook written to {path}")
+    if issues:
+        print(
+            "Export INCOMPLETO: la base contiene tasas guardadas con etiquetas posicionales "
+            "('Tabla N'), que no identifican ningún acuerdo comercial y por lo tanto fueron "
+            "omitidas del libro.",
+            file=sys.stderr,
+        )
+        for hs_code, labels in issues.items():
+            print(f"  HS {hs_code}: {', '.join(labels)}", file=sys.stderr)
+        print(
+            "Repara la base con 'python -m sat_tariff repair-rights' y vuelve a extraer con "
+            "'python -m sat_tariff resume' antes de usar el archivo.",
+            file=sys.stderr,
+        )
+        return 3
+    return 0
+
+
+def cmd_repair_rights(config, *, dry_run: bool = False) -> int:
+    storage = Storage(config.sqlite_db)
+    try:
+        rows_by_code = storage.get_section_rows_by_code("rights")
+        affected = {
+            code: sorted(
+                {
+                    row.get("agreement_name", "")
+                    for row in rows
+                    if is_positional_identity(row.get("agreement_name", ""))
+                }
+            )
+            for code, rows in rows_by_code.items()
+        }
+        affected = {code: labels for code, labels in affected.items() if labels}
+        if not affected:
+            print("No se encontraron filas de 'rights' con identidad posicional.")
+            return 0
+        for code, labels in affected.items():
+            print(f"HS {code}: {', '.join(labels)}")
+        if dry_run:
+            print(f"{len(affected)} código(s) requieren reextracción de 'rights' (dry-run).")
+            return 0
+        storage.reset_section(affected, "rights")
+    finally:
+        storage.close()
+    print(
+        f"Se eliminaron las filas de 'rights' de {len(affected)} código(s) y se reabrió su checkpoint. "
+        "Las secciones Nomenclatura, Restricciones y Cuotas se conservaron. "
+        "Ejecuta 'python -m sat_tariff resume' para reextraerlas y luego 'python -m sat_tariff export'."
+    )
     return 0
 
 
@@ -179,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         "validate-input": lambda: cmd_validate_input(config),
         "status": lambda: cmd_status(config),
         "export": lambda: cmd_export(config),
+        "repair-rights": lambda: cmd_repair_rights(config, dry_run=getattr(args, "dry_run", False)),
         "doctor": lambda: cmd_doctor(config),
         "run": lambda: _run_browser_command(config),
         "resume": lambda: _run_browser_command(config, resume_only=True),

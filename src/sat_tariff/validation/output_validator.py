@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from openpyxl import load_workbook
 from ..exporters.layouts import FORBIDDEN_EXPORT_COLUMNS
 
 EXPECTED_SHEETS = ["Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas"]
+POSITIONAL_HEADER_PATTERN = re.compile(r"^[A-Z0-9]+_TABLA(_\d+)?$", re.IGNORECASE)
 
 
 class OutputValidationError(ValueError):
@@ -36,6 +38,16 @@ def validate_workbook_structure(path: str | Path) -> None:
         nomenclature_headers.append(child or parent)
     if rights_headers[:4] != ["HS_Code", "Status", "Overall_Status", "Código"]:
         raise OutputValidationError("Unexpected Derechos e impuestos headers.")
+    positional_headers = sorted(
+        header
+        for header in rights_headers
+        if header and POSITIONAL_HEADER_PATTERN.match(str(header))
+    )
+    if positional_headers:
+        raise OutputValidationError(
+            "Derechos e impuestos leaks positional columns (table numbers never identify an "
+            f"agreement): {positional_headers}"
+        )
     if restrictions_headers[:4] != ["HS_Code", "Status", "Overall_Status", "Código"]:
         raise OutputValidationError("Unexpected Restricciones headers.")
     if quotas_headers[:4] != ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"]:

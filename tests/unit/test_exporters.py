@@ -249,3 +249,63 @@ def test_rights_sheet_warns_and_separates_unknown_agreements(tmp_path, caplog):
     assert "Acuerdo sin identificador" in caplog.text
     assert "DAI_ACUERDO" not in headers
     workbook.close()
+
+
+def test_rights_sheet_from_clean_extraction_uses_semantic_headers(tmp_path):
+    from sat_tariff.extractors.rights_taxes import SAT_AGREEMENT_COLUMN_MAP, parse_rights_taxes
+
+    html = Path("tests/fixtures/rights_taxes_jsf.html").read_text(encoding="utf-8")
+    result = parse_rights_taxes(html)
+    bundles = [
+        {
+            "raw_code": "4444444444",
+            "state": "completed",
+            "rights": {"status": result.status, "rows": [row.to_dict() for row in result.rows]},
+            "nomenclature": {"rows": []},
+            "restrictions": {"rows": []},
+            "quotas": {"rows": []},
+        }
+    ]
+    path = tmp_path / "clean.xlsx"
+    export_workbook(bundles, AppConfig(output_xlsx=path, backup_output=False))
+
+    workbook = load_workbook(path)
+    headers = [cell.value for cell in workbook["Derechos e impuestos"][1]]
+    assert headers[4:6] == ["DAI_GENERAL", "IVA_GENERAL"]
+    assert set(SAT_AGREEMENT_COLUMN_MAP.values()).issubset(set(headers))
+    assert not any(str(header).startswith(("DAI_TABLA", "IVA_TABLA")) for header in headers if header)
+    workbook.close()
+
+
+def test_rights_sheet_omits_positional_identities_and_reports_them(tmp_path, caplog):
+    from sat_tariff.exporters.excel import collect_positional_rights_issues
+
+    bundles = [
+        {
+            "raw_code": "5555555555",
+            "state": "completed",
+            "rights": {
+                "status": "ok",
+                "rows": [
+                    {"agreement_name": "Tabla 14", "code": "DAI", "value": "10%"},
+                    {"agreement_name": "Tabla 14", "code": "IVA", "value": "12%"},
+                    {"agreement_name": "Tabla 17", "code": "DAI", "value": "0%"},
+                    {"agreement_name": "TRATAMIENTO GENERAL", "code": "DAI", "value": "5%"},
+                ],
+            },
+            "nomenclature": {"rows": []},
+            "restrictions": {"rows": []},
+            "quotas": {"rows": []},
+        }
+    ]
+    assert collect_positional_rights_issues(bundles) == {"5555555555": ["Tabla 14", "Tabla 17"]}
+
+    path = tmp_path / "positional.xlsx"
+    export_workbook(bundles, AppConfig(output_xlsx=path, backup_output=False))
+
+    workbook = load_workbook(path)
+    headers = [cell.value for cell in workbook["Derechos e impuestos"][1] if cell.value]
+    assert "DAI_GENERAL" in headers
+    assert not any(str(header).startswith(("DAI_TABLA", "IVA_TABLA")) for header in headers)
+    assert "repair-rights" in caplog.text
+    workbook.close()
