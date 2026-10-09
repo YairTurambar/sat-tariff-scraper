@@ -111,12 +111,16 @@ Column order:
 3. `Overall_Status` (fixed, merged)
 4. `Código` (fixed, merged — pipe-joined list of codes present in the row)
 5. One column per distinct `(duty/tax code, agreement)` pair found in the
-   data, ordered with `TRATAMIENTO GENERAL` first, followed by other
-   agreements in the order hinted by `DUTY_GROUP_ORDER_HINT`. Agreement names
-   are normalized and matched to SAT's canonical agreement mapping (for
-   example, SAT's `ADAE` agreement is exported as `DAI_AE`); any unknown
-   agreement with an explicit trailing code uses that code, and otherwise uses
-   a stable name-based suffix.
+   data. The rate columns are ordered as `DAI_GENERAL`, `IVA_GENERAL`, the
+   canonical SAT agreements (`DAI_BZ`, `DAI_CL`, `DAI_CO`, `DAI_US`, `DAI_CU`,
+   `DAI_DO`, `DAI_EC`, `DAI_AE`, `DAI_MX`, `DAI_PA`, `DAI_TW`, `DAI_UK`,
+   `DAI_IL`), and then dynamic columns alphabetically. Agreement names are
+   normalized and matched to SAT's canonical agreement mapping (for example,
+   Mexico is always exported as `DAI_MX`). An unknown agreement is exported
+   only when its name has an explicit trailing code; otherwise its value is
+   retained in SQLite and a warning containing the agreement and HS Code is
+   logged, with no guessed column assignment. Explicit-code collisions receive
+   deterministic suffixed columns rather than being merged.
 6. `Código adicional` (fixed, merged)
 7. `Código de cuota` (fixed, merged)
 

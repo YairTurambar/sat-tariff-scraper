@@ -142,7 +142,7 @@ def test_rights_sheet_uses_flat_dynamic_headers(tmp_path):
 
     row1 = [cell.value for cell in rights[1]]
     assert row1[4:6] == ["DAI_GENERAL", "IVA_GENERAL"]
-    assert row1[6] == "DAI_MX"
+    assert row1[6] == "DAI_CL"
 
     workbook.close()
 
@@ -212,4 +212,40 @@ def test_rights_sheet_keeps_values_with_their_agreements_across_codes(tmp_path):
     assert rows_by_code["2222222222"]["DAI_MX"] == "3%"
     assert rows_by_code["2222222222"]["DAI_BZ"] is None
     assert rows_by_code["2222222222"]["DAI_XY"] == "1%"
+    workbook.close()
+
+
+def test_rights_sheet_warns_and_separates_unknown_agreements(tmp_path, caplog):
+    bundles = [
+        {
+            "raw_code": "3333333333",
+            "state": "completed",
+            "rights": {
+                "status": "ok",
+                "rows": [
+                    {"agreement_name": "Acuerdo Uno - XY", "code": "DAI", "value": "1%"},
+                    {"agreement_name": "Acuerdo Dos - XY", "code": "DAI", "value": "2%"},
+                    {"agreement_name": "Acuerdo sin identificador", "code": "DAI", "value": "3%"},
+                    {"agreement_name": "Acuerdo Uno - XY", "code": "DAI", "value": "1%"},
+                ],
+            },
+            "nomenclature": {"rows": []},
+            "restrictions": {"rows": []},
+            "quotas": {"rows": []},
+        }
+    ]
+    path = tmp_path / "unknown-agreements.xlsx"
+    export_workbook(bundles, AppConfig(output_xlsx=path, backup_output=False))
+
+    workbook = load_workbook(path)
+    rights = workbook["Derechos e impuestos"]
+    headers = [cell.value for cell in rights[1]]
+    assert headers[4:6] == ["DAI_XY", "DAI_XY_2"]
+    values = {
+        headers[column - 1]: rights.cell(row=2, column=column).value
+        for column in range(1, rights.max_column + 1)
+    }
+    assert {values["DAI_XY"], values["DAI_XY_2"]} == {"1%", "2%"}
+    assert "Acuerdo sin identificador" in caplog.text
+    assert "DAI_ACUERDO" not in headers
     workbook.close()

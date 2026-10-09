@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import datetime, timezone
+import logging
 import os
 from pathlib import Path
 import re
@@ -15,10 +16,17 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
-from ..extractors.rights_taxes import agreement_column_name
+from ..extractors.rights_taxes import SAT_AGREEMENT_COLUMN_MAP, agreement_column_name, agreement_lookup_key
 from ..validation.output_validator import validate_workbook_structure
-from .layouts import DUTY_GROUP_ORDER_HINT, FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
+from .layouts import FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, set_data_row_heights, style_data_cells, style_headers
+
+LOGGER = logging.getLogger(__name__)
+AGREEMENT_ORDER = ("BZ", "CL", "CO", "US", "CU", "DO", "EC", "AE", "MX", "PA", "TW", "UK", "IL")
+CANONICAL_AGREEMENT_KEYS = {
+    *(agreement_lookup_key(name) for name in SAT_AGREEMENT_COLUMN_MAP),
+    agreement_lookup_key("TRATAMIENTO GENERAL"),
+}
 
 
 def _ascii_slug(value: str) -> str:
@@ -38,7 +46,9 @@ def _base_row(bundle: dict[str, Any], section_key: str) -> dict[str, Any]:
 
 
 
-def _rights_column_metadata(bundles: list[dict[str, Any]]) -> "OrderedDict[str, tuple[str, str, str]]":
+def _rights_column_metadata(
+    bundles: list[dict[str, Any]],
+) -> tuple["OrderedDict[str, tuple[str, str, str]]", dict[str, str]]:
     """Map each dynamic rights column name to (code_label, suffix, group_label).
 
     ``group_label`` is the first full agreement name seen for that suffix
@@ -46,28 +56,59 @@ def _rights_column_metadata(bundles: list[dict[str, Any]]) -> "OrderedDict[str, 
     used as the merged group header above the per-code value columns.
     """
     metadata: "OrderedDict[str, tuple[str, str, str]]" = OrderedDict()
+    candidates: dict[tuple[str, str], tuple[str, str, str]] = {}
+    dynamic_names: dict[str, str] = {}
+    used_columns: set[str] = set()
     for bundle in bundles:
         for row in bundle.get("rights", {}).get("rows", []):
             code_label = _ascii_slug(row.get("code", ""))
             agreement_name = row.get("agreement_name", "")
             column_name = agreement_column_name(agreement_name, code_label)
-            suffix = column_name.partition("_")[2]
-            metadata.setdefault(column_name, (code_label, suffix, agreement_name.strip() or suffix))
-    return metadata
+            if column_name is None:
+                LOGGER.warning(
+                    "Unmapped agreement without explicit code: %r (HS Code %s)",
+                    agreement_name,
+                    bundle.get("raw_code", bundle.get("code", "")),
+                )
+                continue
+            normalized_name = agreement_lookup_key(agreement_name)
+            candidates.setdefault(
+                (normalized_name, code_label),
+                (column_name, code_label, agreement_name.strip() or column_name),
+            )
+    for agreement_key in sorted(
+        candidates,
+        key=lambda key: (0 if key[0] in CANONICAL_AGREEMENT_KEYS else 1, key),
+    ):
+        base_column, code_label, label = candidates[agreement_key]
+        column_name = base_column
+        if column_name in used_columns:
+            suffix = 2
+            column_name = f"{base_column}_{suffix}"
+            while column_name in used_columns:
+                suffix += 1
+                column_name = f"{base_column}_{suffix}"
+        dynamic_names["\x1f".join(agreement_key)] = column_name
+        used_columns.add(column_name)
+        suffix = column_name.partition("_")[2]
+        metadata[column_name] = (code_label, suffix, label)
+    return metadata, dynamic_names
 
 
 
 def _rights_dynamic_columns(metadata: "OrderedDict[str, tuple[str, str, str]]") -> list[str]:
     ordered_names = list(metadata.keys())
-    original_index = {name: index for index, name in enumerate(ordered_names)}
-    hint_order = {suffix: index for index, suffix in enumerate(DUTY_GROUP_ORDER_HINT)}
+    mapped_order = {suffix: index for index, suffix in enumerate(AGREEMENT_ORDER)}
 
     def sort_key(column_name: str) -> tuple[int, int, str]:
         _code, suffix, _label = metadata[column_name]
-        if suffix == "GENERAL":
-            return (0, original_index[column_name], column_name)
-        hint_index = hint_order.get(suffix, len(DUTY_GROUP_ORDER_HINT))
-        return (1 + hint_index, original_index[column_name], column_name)
+        if column_name == "DAI_GENERAL":
+            return (0, 0, column_name)
+        if column_name == "IVA_GENERAL":
+            return (0, 1, column_name)
+        if suffix in mapped_order:
+            return (1, mapped_order[suffix], column_name)
+        return (2, 0, column_name)
 
     return sorted(ordered_names, key=sort_key)
 
@@ -75,6 +116,7 @@ def _rights_dynamic_columns(metadata: "OrderedDict[str, tuple[str, str, str]]") 
 
 def _build_rights_rows(bundles: list[dict[str, Any]], dynamic_columns: list[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    aliases = _rights_column_metadata(bundles)[1]
     for bundle in bundles:
         base = _base_row(bundle, "rights")
         section_rows = bundle.get("rights", {}).get("rows", [])
@@ -85,14 +127,18 @@ def _build_rights_rows(bundles: list[dict[str, Any]], dynamic_columns: list[str]
         for source in section_rows:
             key = (source.get("additional_code", ""), source.get("quota_code", ""))
             target = grouped.setdefault(key, {**base, "Código": "", **{column: "" for column in dynamic_columns}, "Código adicional": key[0], "Código de cuota": key[1]})
-            column_name = agreement_column_name(
-                source.get("agreement_name", ""),
-                _ascii_slug(source.get("code", "")),
-            )
+            normalized_name = agreement_lookup_key(source.get("agreement_name", ""))
+            code_label = _ascii_slug(source.get("code", ""))
+            column_name = aliases.get("\x1f".join((normalized_name, code_label)))
+            if column_name is None:
+                continue
             existing = target.get(column_name, "")
             new_value = source.get("value", "")
             if new_value:
-                target[column_name] = f"{existing}\n{new_value}".strip()
+                values = existing.split("\n") if existing else []
+                if new_value not in values:
+                    values.append(new_value)
+                target[column_name] = "\n".join(values)
             source_code = source.get("code", "")
             if source_code:
                 merged_codes = list(
@@ -248,7 +294,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
     default_sheet = workbook.active
     workbook.remove(default_sheet)
 
-    dynamic_rights_metadata = _rights_column_metadata(bundles)
+    dynamic_rights_metadata, _ = _rights_column_metadata(bundles)
     dynamic_rights = _rights_dynamic_columns(dynamic_rights_metadata)
     rights_headers = RIGHTS_BASE_HEADERS + dynamic_rights + RIGHTS_TRAILING_HEADERS
     sections = {
