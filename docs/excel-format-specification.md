@@ -112,9 +112,11 @@ Column order:
 4. `Código` (fixed, merged — pipe-joined list of codes present in the row)
 5. One column per distinct `(duty/tax code, agreement)` pair found in the
    data, ordered with `TRATAMIENTO GENERAL` first, followed by other
-   agreements in the order hinted by `DUTY_GROUP_ORDER_HINT`
-   (`GENERAL, MX, CL, ADAE, CO, UK, US, PE, TW, DO, CU`), then any unknown
-   suffix.
+   agreements in the order hinted by `DUTY_GROUP_ORDER_HINT`. Agreement names
+   are normalized and matched to SAT's canonical agreement mapping (for
+   example, SAT's `ADAE` agreement is exported as `DAI_AE`); any unknown
+   agreement with an explicit trailing code uses that code, and otherwise uses
+   a stable name-based suffix.
 6. `Código adicional` (fixed, merged)
 7. `Código de cuota` (fixed, merged)
 

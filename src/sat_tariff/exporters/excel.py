@@ -15,7 +15,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
-from ..extractors.rights_taxes import agreement_suffix as _agreement_suffix
+from ..extractors.rights_taxes import agreement_column_name
 from ..validation.output_validator import validate_workbook_structure
 from .layouts import DUTY_GROUP_ORDER_HINT, FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, set_data_row_heights, style_data_cells, style_headers
@@ -50,10 +50,8 @@ def _rights_column_metadata(bundles: list[dict[str, Any]]) -> "OrderedDict[str, 
         for row in bundle.get("rights", {}).get("rows", []):
             code_label = _ascii_slug(row.get("code", ""))
             agreement_name = row.get("agreement_name", "")
-            suffix = _agreement_suffix(agreement_name)
-            column_name = f"{code_label}_{suffix}"
-            if column_name == "_":
-                continue
+            column_name = agreement_column_name(agreement_name, code_label)
+            suffix = column_name.partition("_")[2]
             metadata.setdefault(column_name, (code_label, suffix, agreement_name.strip() or suffix))
     return metadata
 
@@ -87,7 +85,10 @@ def _build_rights_rows(bundles: list[dict[str, Any]], dynamic_columns: list[str]
         for source in section_rows:
             key = (source.get("additional_code", ""), source.get("quota_code", ""))
             target = grouped.setdefault(key, {**base, "Código": "", **{column: "" for column in dynamic_columns}, "Código adicional": key[0], "Código de cuota": key[1]})
-            column_name = f"{_ascii_slug(source.get('code', ''))}_{_agreement_suffix(source.get('agreement_name', ''))}"
+            column_name = agreement_column_name(
+                source.get("agreement_name", ""),
+                _ascii_slug(source.get("code", "")),
+            )
             existing = target.get(column_name, "")
             new_value = source.get("value", "")
             if new_value:

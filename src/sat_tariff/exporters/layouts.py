@@ -3,7 +3,22 @@
 SECTION_LABELS = ("Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas")
 STANDARD_SECTION_COLUMNS = ("Código", "Descripción", "Código adicional", "Valor", "Código de cuota")
 QUOTA_EMPTY_MESSAGE = "No se han encontrado cuotas/contingentes para el inciso consultado"
-DUTY_GROUP_ORDER_HINT = ("GENERAL", "MX", "CL", "ADAE", "CO", "UK", "US", "PE", "TW", "DO", "CU")
+DUTY_GROUP_ORDER_HINT = (
+    "GENERAL",
+    "MX",
+    "CL",
+    "AE",
+    "CO",
+    "UK",
+    "US",
+    "TW",
+    "DO",
+    "CU",
+    "BZ",
+    "EC",
+    "PA",
+    "IL",
+)
 FORBIDDEN_EXPORT_COLUMNS = {"Table_Name", "Record_Type", "Message", "Resultado", "Content", "Input_Index"}
 
 SHEET_ORDER = list(SECTION_LABELS)

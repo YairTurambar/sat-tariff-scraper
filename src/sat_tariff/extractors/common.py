@@ -88,12 +88,25 @@ def table_to_dicts(table: Tag) -> list[dict[str, str]]:
     return extracted
 
 
-def iter_standard_section_tables(soup: BeautifulSoup) -> list[tuple[str, list[dict[str, str]]]]:
+def iter_standard_section_tables(
+    soup: BeautifulSoup,
+    *,
+    max_title_length: int | None = 120,
+) -> list[tuple[str, list[dict[str, str]]]]:
     matches: list[tuple[str, list[dict[str, str]]]] = []
     for index, table in enumerate(soup.find_all("table"), start=1):
         if not is_standard_section_table(table):
             continue
-        matches.append((infer_table_title(table, f"Tabla {index}"), table_to_dicts(table)))
+        matches.append(
+            (
+                infer_table_title(
+                    table,
+                    f"Tabla {index}",
+                    max_title_length=max_title_length,
+                ),
+                table_to_dicts(table),
+            )
+        )
     return matches
 
 
@@ -107,7 +120,12 @@ def find_anchor(soup: BeautifulSoup, label: str) -> Tag | None:
 
 
 
-def infer_table_title(table: Tag, fallback: str = "") -> str:
+def infer_table_title(
+    table: Tag,
+    fallback: str = "",
+    *,
+    max_title_length: int | None = 120,
+) -> str:
     caption = table.find("caption")
     if caption:
         text = cell_text(caption)
@@ -118,7 +136,11 @@ def infer_table_title(table: Tag, fallback: str = "") -> str:
         if element.find_parent("table") is not None:
             continue
         text = normalize_text(element.get_text(" ", strip=True))
-        if not text or len(text) > 120 or normalize_label(text) in ignored:
+        if (
+            not text
+            or (max_title_length is not None and len(text) > max_title_length)
+            or normalize_label(text) in ignored
+        ):
             continue
         return text
     return fallback
