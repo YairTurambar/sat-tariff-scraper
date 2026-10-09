@@ -110,7 +110,7 @@ def test_mapped_agreement_keeps_distinct_duty_and_tax_codes():
 
 def test_unknown_agreement_uses_only_an_explicit_trailing_code():
     assert agreement_column_name("Nuevo Acuerdo Comercial – XY") == "DAI_XY"
-    assert agreement_column_name("Acuerdo México sin código") != "DAI_MX"
+    assert agreement_column_name("Acuerdo México sin código") is None
 
 
 def test_rights_taxes_preserves_long_official_agreement_title():

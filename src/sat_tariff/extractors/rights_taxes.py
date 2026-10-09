@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Final
 
 from .common import ExtractionResult, ascii_upper, iter_standard_section_tables, normalize_text, parse_html
 from ..models import RightsTaxesRow
 
 
-SAT_AGREEMENT_COLUMNS = {
+SAT_AGREEMENT_COLUMN_MAP: Final = {
     "Acuerdo de Alcance Parcial entre el Gobierno de la República de Guatemala y el Gobierno de Belice - BZ": "DAI_BZ",
     "Tratado de Libre Comercio Entre Centroamérica y Chile - CL": "DAI_CL",
     "Tratado de Libre Comercio entre la República de Colombia y las Repúblicas de El Salvador, Guatemala y Honduras - CO": "DAI_CO",
@@ -41,14 +42,19 @@ def _agreement_lookup_key(agreement_name: str) -> str:
     return without_accents.casefold()
 
 
+def agreement_lookup_key(agreement_name: str) -> str:
+    """Return the accent- and case-insensitive identity used for matching."""
+    return _agreement_lookup_key(agreement_name)
+
+
 _AGREEMENT_COLUMNS_BY_KEY = {
     _agreement_lookup_key(agreement_name): column_name
-    for agreement_name, column_name in SAT_AGREEMENT_COLUMNS.items()
+    for agreement_name, column_name in SAT_AGREEMENT_COLUMN_MAP.items()
 }
 _GENERAL_AGREEMENT_KEY = _agreement_lookup_key("TRATAMIENTO GENERAL")
 
 
-def agreement_column_name(agreement_name: str, duty_code: str = "DAI") -> str:
+def agreement_column_name(agreement_name: str, duty_code: str = "DAI") -> str | None:
     code_label = re.sub(r"[^A-Z0-9]+", "_", ascii_upper(duty_code)).strip("_") or "DAI"
     lookup_key = _agreement_lookup_key(agreement_name)
     if lookup_key == _GENERAL_AGREEMENT_KEY:
@@ -66,12 +72,11 @@ def agreement_column_name(agreement_name: str, duty_code: str = "DAI") -> str:
         if suffix:
             return f"{code_label}_{suffix}"
 
-    fallback = re.sub(r"[^A-Z0-9]+", "_", ascii_upper(normalized_name)).strip("_") or "OTRO"
-    return f"{code_label}_{fallback}"
+    return None
 
 
 def agreement_suffix(agreement_name: str) -> str:
-    return agreement_column_name(agreement_name).removeprefix("DAI_")
+    return (agreement_column_name(agreement_name) or "").removeprefix("DAI_")
 
 
 def parse_rights_taxes(html: str) -> ExtractionResult[RightsTaxesRow]:
