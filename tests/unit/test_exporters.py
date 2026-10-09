@@ -145,3 +145,71 @@ def test_rights_sheet_uses_flat_dynamic_headers(tmp_path):
     assert row1[6] == "DAI_MX"
 
     workbook.close()
+
+
+def test_rights_sheet_keeps_values_with_their_agreements_across_codes(tmp_path):
+    mexico = (
+        "Tratado de Libre Comercio Entre Los Estados Unidos Mexicanos y las "
+        "Repúblicas de Costa Rica, El Salvador, Guatemala, Honduras y Nicaragua - MX"
+    )
+    mexico_alias = (
+        "TRATADO DE LIBRE COMERCIO ENTRE LOS ESTADOS UNIDOS MEXICANOS Y LAS "
+        "REPUBLICAS DE COSTA RICA, EL SALVADOR, GUATEMALA, HONDURAS Y NICARAGUA — MX"
+    )
+    belize = (
+        "Acuerdo de Alcance Parcial entre el Gobierno de la República de Guatemala "
+        "y el Gobierno de Belice - BZ"
+    )
+    bundles = [
+        {
+            "raw_code": "1111111111",
+            "state": "completed",
+            "rights": {
+                "status": "ok",
+                "rows": [
+                    {"agreement_name": belize, "code": "DAI", "value": "2%"},
+                    {"agreement_name": mexico, "code": "DAI", "value": "7%"},
+                ],
+            },
+            "nomenclature": {"rows": []},
+            "restrictions": {"rows": []},
+            "quotas": {"rows": []},
+        },
+        {
+            "raw_code": "2222222222",
+            "state": "completed",
+            "rights": {
+                "status": "ok",
+                "rows": [
+                    {"agreement_name": "Nuevo Acuerdo Comercial - XY", "code": "DAI", "value": "1%"},
+                    {"agreement_name": mexico_alias, "code": "DAI", "value": "3%"},
+                ],
+            },
+            "nomenclature": {"rows": []},
+            "restrictions": {"rows": []},
+            "quotas": {"rows": []},
+        },
+    ]
+    path = tmp_path / "agreements.xlsx"
+    config = AppConfig(output_xlsx=path, backup_output=False)
+
+    export_workbook(bundles, config)
+
+    workbook = load_workbook(path)
+    rights = workbook["Derechos e impuestos"]
+    headers = [cell.value for cell in rights[1]]
+    assert headers.count("DAI_MX") == 1
+    rows_by_code = {
+        rights.cell(row=row_index, column=1).value: {
+            header: rights.cell(row=row_index, column=column_index).value
+            for column_index, header in enumerate(headers, start=1)
+        }
+        for row_index in range(2, rights.max_row + 1)
+    }
+    assert rows_by_code["1111111111"]["DAI_MX"] == "7%"
+    assert rows_by_code["1111111111"]["DAI_BZ"] == "2%"
+    assert rows_by_code["1111111111"]["DAI_XY"] is None
+    assert rows_by_code["2222222222"]["DAI_MX"] == "3%"
+    assert rows_by_code["2222222222"]["DAI_BZ"] is None
+    assert rows_by_code["2222222222"]["DAI_XY"] == "1%"
+    workbook.close()
