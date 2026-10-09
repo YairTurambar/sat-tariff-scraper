@@ -177,6 +177,46 @@ class Storage:
             payload.append(bundle)
         return payload
 
+    def get_section_rows_by_code(self, section: str) -> dict[str, list[dict[str, Any]]]:
+        """Return the stored rows of a single section grouped by HS code."""
+        table_name = SECTION_TABLES[section]
+        rows = self.connection.execute(
+            f"SELECT code, extracted_json FROM {table_name} ORDER BY code, row_index"
+        ).fetchall()
+        payload: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            parsed = json.loads(row["extracted_json"])
+            if not parsed:
+                continue
+            payload.setdefault(row["code"], []).append(parsed)
+        return payload
+
+    def reset_section(
+        self,
+        codes: Iterable[str],
+        section: str,
+        *,
+        target_state: ProcessingState = ProcessingState.pending,
+    ) -> int:
+        """Delete the rows of ``section`` for ``codes`` and reopen their checkpoint.
+
+        Only the requested section is removed; the other sections already stored
+        for those HS codes are preserved.
+        """
+        table_name = SECTION_TABLES[section]
+        unique_codes = list(dict.fromkeys(codes))
+        if not unique_codes:
+            return 0
+        now = self._now()
+        with self.transaction() as conn:
+            for code in unique_codes:
+                conn.execute(f"DELETE FROM {table_name} WHERE code = ?", (code,))
+                conn.execute(
+                    "UPDATE hs_codes SET state = ?, last_error = NULL, updated_at = ? WHERE code = ?",
+                    (target_state.value, now, code),
+                )
+        return len(unique_codes)
+
     def get_status_summary(self) -> dict[str, int]:
         rows = self.connection.execute(
             "SELECT state, COUNT(*) AS total FROM hs_codes GROUP BY state ORDER BY state"

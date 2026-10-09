@@ -121,6 +121,11 @@ Column order:
    retained in SQLite and a warning containing the agreement and HS Code is
    logged, with no guessed column assignment. Explicit-code collisions receive
    deterministic suffixed columns rather than being merged.
+   Positional labels are rejected: a rate stored with `agreement_name` equal to
+   `Tabla N` never produces a `DAI_TABLA_*` or `IVA_TABLA_*` column. It is
+   omitted, logged as an error with its HS Code, and `python -m sat_tariff
+   export` exits with code `3`. `validate_workbook_structure()` also refuses to
+   accept any workbook whose rights headers look positional.
 6. `Código adicional` (fixed, merged)
 7. `Código de cuota` (fixed, merged)
 

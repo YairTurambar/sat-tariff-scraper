@@ -5,7 +5,13 @@ import pytest
 from sat_tariff.extractors.nomenclature import parse_nomenclature
 from sat_tariff.extractors.quotas import NO_QUOTA_MESSAGE, parse_quotas
 from sat_tariff.extractors.restrictions import parse_restrictions
-from sat_tariff.extractors.rights_taxes import agreement_column_name, parse_rights_taxes
+from sat_tariff.extractors.rights_taxes import (
+    SAT_AGREEMENT_COLUMN_MAP,
+    agreement_column_name,
+    is_positional_identity,
+    is_valid_agreement_identity,
+    parse_rights_taxes,
+)
 
 FIXTURES = Path("tests/fixtures")
 
@@ -169,3 +175,66 @@ def test_quotas_exact_no_quota_message_and_data_case():
     data = parse_quotas(read_fixture("quotas_with_data.html"))
     assert data.status == "ok"
     assert "Cupo anual" in data.rows[0].message
+
+
+def test_rights_taxes_resolves_every_official_agreement_from_jsf_structure():
+    result = parse_rights_taxes(read_fixture("rights_taxes_jsf.html"))
+
+    assert result.status == "ok"
+    columns = [agreement_column_name(row.agreement_name, row.code) for row in result.rows]
+    assert columns[:2] == ["DAI_GENERAL", "IVA_GENERAL"]
+    assert set(columns) == {"DAI_GENERAL", "IVA_GENERAL"} | set(SAT_AGREEMENT_COLUMN_MAP.values())
+    assert None not in columns
+    assert not any(is_positional_identity(row.agreement_name) for row in result.rows)
+    general_rows = [row for row in result.rows if row.agreement_name == "TRATAMIENTO GENERAL"]
+    assert {row.code: row.value for row in general_rows} == {"DAI": "10%", "IVA": "12%"}
+    belize = next(row for row in result.rows if agreement_column_name(row.agreement_name) == "DAI_BZ")
+    mexico = next(row for row in result.rows if agreement_column_name(row.agreement_name) == "DAI_MX")
+    assert belize.value == "0%"
+    assert mexico.value == "5%"
+
+
+def test_rights_taxes_nested_table_does_not_borrow_another_agreement_title():
+    result = parse_rights_taxes(read_fixture("rights_taxes_jsf.html"))
+
+    names = [row.agreement_name for row in result.rows]
+    # Each rates table keeps its own identity: the only repeated name is the
+    # general treatment, which legitimately owns the DAI and IVA rows.
+    assert len([name for name in names if name == "TRATAMIENTO GENERAL"]) == 2
+    assert len(set(names)) == len(SAT_AGREEMENT_COLUMN_MAP) + 1
+
+
+def test_rights_taxes_resolves_title_beyond_the_old_twenty_node_limit():
+    agreement_name = (
+        "Acuerdo por el que se establece una Asociación entre la Unión Europea "
+        "y sus Estados Miembros, por un lado, y Centroamérica, por otro (UE) - ADAE"
+    )
+    filler = "".join(f"<div><span></span></div>" for _ in range(40))
+    html = (
+        f"<h3>{agreement_name}</h3>{filler}"
+        "<table><tr><th>Código</th><th>Descripción</th><th>Valor</th></tr>"
+        "<tr><td>DAI</td><td>Preferencial</td><td>0%</td></tr></table>"
+    )
+
+    result = parse_rights_taxes(html)
+
+    assert result.rows[0].agreement_name == agreement_name
+
+
+def test_rights_taxes_reports_unresolvable_tables_instead_of_positional_identities():
+    result = parse_rights_taxes(read_fixture("rights_taxes_unresolvable.html"))
+
+    assert result.status == "incomplete"
+    assert result.rows == []
+    assert "reextraer" in (result.message or "")
+    assert "DAI" in (result.message or "")
+
+
+def test_positional_labels_are_never_valid_agreement_identities():
+    for label in ("Tabla 14", "tabla  17", "TABLA17", "Table 3"):
+        assert is_positional_identity(label) is True
+        assert is_valid_agreement_identity(label) is False
+    assert is_positional_identity("TRATAMIENTO GENERAL") is False
+    assert is_valid_agreement_identity("TRATAMIENTO GENERAL") is True
+    assert is_valid_agreement_identity("Código") is False
+    assert is_valid_agreement_identity("") is False

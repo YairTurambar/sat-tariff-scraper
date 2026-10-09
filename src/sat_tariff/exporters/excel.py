@@ -16,7 +16,12 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 from ..config import AppConfig
-from ..extractors.rights_taxes import SAT_AGREEMENT_COLUMN_MAP, agreement_column_name, agreement_lookup_key
+from ..extractors.rights_taxes import (
+    SAT_AGREEMENT_COLUMN_MAP,
+    agreement_column_name,
+    agreement_lookup_key,
+    is_positional_identity,
+)
 from ..validation.output_validator import validate_workbook_structure
 from .layouts import FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, set_data_row_heights, style_data_cells, style_headers
@@ -63,12 +68,24 @@ def _rights_column_metadata(
         for row in bundle.get("rights", {}).get("rows", []):
             code_label = _ascii_slug(row.get("code", ""))
             agreement_name = row.get("agreement_name", "")
+            hs_code = bundle.get("raw_code", bundle.get("code", ""))
+            if is_positional_identity(agreement_name):
+                LOGGER.error(
+                    "HS Code %s stores the positional label %r instead of an agreement name. "
+                    "Table numbers never identify an agreement, so the rate is omitted from the "
+                    "workbook. Re-extract the 'rights' section with "
+                    "'python -m sat_tariff repair-rights' followed by 'python -m sat_tariff resume'.",
+                    hs_code,
+                    agreement_name,
+                )
+                continue
             column_name = agreement_column_name(agreement_name, code_label)
             if column_name is None:
                 LOGGER.warning(
-                    "Unmapped agreement without explicit code: %r (HS Code %s)",
+                    "Unmapped agreement without a reliable trailing code: %r (HS Code %s). "
+                    "The rate is omitted; add the official name to SAT_AGREEMENT_COLUMN_MAP.",
                     agreement_name,
-                    bundle.get("raw_code", bundle.get("code", "")),
+                    hs_code,
                 )
                 continue
             normalized_name = agreement_lookup_key(agreement_name)
@@ -94,6 +111,27 @@ def _rights_column_metadata(
         metadata[column_name] = (code_label, suffix, label)
     return metadata, dynamic_names
 
+
+
+def collect_positional_rights_issues(bundles: list[dict[str, Any]]) -> "OrderedDict[str, list[str]]":
+    """Return the HS codes whose stored rights rows lack an agreement identity.
+
+    Legacy databases persisted the positional fallback ``"Tabla N"`` as
+    ``agreement_name``. Such rows cannot be mapped back to a real agreement and
+    must never become ``DAI_TABLA_*`` columns, so the caller has to report them
+    and request a re-extraction of the ``rights`` section.
+    """
+    issues: "OrderedDict[str, list[str]]" = OrderedDict()
+    for bundle in bundles:
+        hs_code = bundle.get("raw_code", bundle.get("code", ""))
+        found: list[str] = []
+        for row in bundle.get("rights", {}).get("rows", []):
+            agreement_name = row.get("agreement_name", "")
+            if is_positional_identity(agreement_name) and agreement_name not in found:
+                found.append(agreement_name)
+        if found:
+            issues[hs_code] = found
+    return issues
 
 
 def _rights_dynamic_columns(metadata: "OrderedDict[str, tuple[str, str, str]]") -> list[str]:

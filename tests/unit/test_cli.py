@@ -93,3 +93,76 @@ def test_doctor_reports_invalid_configured_executable(monkeypatch, capsys, tmp_p
     captured = capsys.readouterr()
     assert rc == 1
     assert "SAT_BROWSER_EXECUTABLE_PATH" in captured.err
+
+
+def _store_rights_rows(db_path: Path, rows):
+    storage = Storage(db_path)
+    try:
+        storage.upsert_code("0101210000", "0101210000")
+        storage.save_section_rows("0101210000", "rights", rows, section_status="ok")
+        storage.save_section_rows(
+            "0101210000",
+            "nomenclature",
+            [{"record_type": "unit", "unit_code": "KGM", "unit_description": "Kilogramo"}],
+            section_status="ok",
+        )
+    finally:
+        storage.close()
+
+
+def test_export_command_fails_when_sqlite_holds_positional_rights(monkeypatch, capsys, tmp_path):
+    db_path = make_db_path()
+    _store_rights_rows(
+        db_path,
+        [
+            {"agreement_name": "Tabla 14", "code": "DAI", "value": "10%"},
+            {"agreement_name": "TRATAMIENTO GENERAL", "code": "IVA", "value": "12%"},
+        ],
+    )
+    monkeypatch.setenv("SAT_SQLITE_DB", str(db_path))
+    monkeypatch.setenv("SAT_OUTPUT_XLSX", str(tmp_path / "out.xlsx"))
+
+    rc = cli.main(["export"])
+
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "Export INCOMPLETO" in captured.err
+    assert "Tabla 14" in captured.err
+    assert "repair-rights" in captured.err
+    db_path.unlink(missing_ok=True)
+
+
+def test_repair_rights_command_resets_only_the_rights_section(monkeypatch, capsys):
+    db_path = make_db_path()
+    _store_rights_rows(
+        db_path,
+        [
+            {"agreement_name": "Tabla 14", "code": "DAI", "value": "10%"},
+            {"agreement_name": "TRATAMIENTO GENERAL", "code": "IVA", "value": "12%"},
+        ],
+    )
+    monkeypatch.setenv("SAT_SQLITE_DB", str(db_path))
+
+    assert cli.main(["repair-rights", "--dry-run"]) == 0
+    dry_run_out = capsys.readouterr().out
+    assert "dry-run" in dry_run_out
+
+    storage = Storage(db_path)
+    try:
+        assert storage.get_section_rows_by_code("rights")
+    finally:
+        storage.close()
+
+    assert cli.main(["repair-rights"]) == 0
+    out = capsys.readouterr().out
+    assert "HS 0101210000: Tabla 14" in out
+
+    storage = Storage(db_path)
+    try:
+        assert storage.get_section_rows_by_code("rights") == {}
+        assert storage.get_section_rows_by_code("nomenclature")
+        assert storage.get_processed_sections("0101210000") == {"nomenclature"}
+        assert storage.get_code("0101210000")["state"] == "pending"
+    finally:
+        storage.close()
+    db_path.unlink(missing_ok=True)
