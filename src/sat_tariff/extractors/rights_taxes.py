@@ -56,7 +56,8 @@ def agreement_column_name(agreement_name: str, duty_code: str = "DAI") -> str:
 
     mapped_column = _AGREEMENT_COLUMNS_BY_KEY.get(lookup_key)
     if mapped_column:
-        return mapped_column
+        mapped_suffix = mapped_column.partition("_")[2]
+        return f"{code_label}_{mapped_suffix}"
 
     normalized_name = normalize_agreement_name(agreement_name)
     match = _EXPLICIT_CODE_RE.search(normalized_name)

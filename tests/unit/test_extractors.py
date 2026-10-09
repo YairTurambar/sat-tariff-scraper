@@ -98,6 +98,16 @@ def test_agreement_matching_normalizes_case_accents_spacing_and_hyphens():
     assert agreement_column_name("TRATAMIENTO GENERAL", "IVA") == "IVA_GENERAL"
 
 
+def test_mapped_agreement_keeps_distinct_duty_and_tax_codes():
+    agreement_name = (
+        "Acuerdo de Alcance Parcial entre el Gobierno de la República de Guatemala "
+        "y el Gobierno de Belice - BZ"
+    )
+
+    assert agreement_column_name(agreement_name, "DAI") == "DAI_BZ"
+    assert agreement_column_name(agreement_name, "IVA") == "IVA_BZ"
+
+
 def test_unknown_agreement_uses_only_an_explicit_trailing_code():
     assert agreement_column_name("Nuevo Acuerdo Comercial – XY") == "DAI_XY"
     assert agreement_column_name("Acuerdo México sin código") != "DAI_MX"
