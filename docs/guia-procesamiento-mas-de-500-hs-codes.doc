@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="ProgId" content="Word.Document">
+<meta name="Generator" content="GitHub Copilot">
+<title>Procesamiento de más de 500 HS Codes por lotes</title>
+<style>
+body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.35; margin: 2.5cm; color: #222; }
+h1 { color: #1f4e79; font-size: 20pt; }
+h2 { color: #2f5597; font-size: 15pt; margin-top: 24pt; }
+h3 { color: #4472c4; font-size: 12pt; margin-top: 18pt; }
+code, pre { font-family: Consolas, monospace; font-size: 9.5pt; }
+pre { background: #f3f6f9; border: 1px solid #c9d2dc; padding: 10pt; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; margin: 10pt 0; }
+th, td { border: 1px solid #777; padding: 6pt; vertical-align: top; }
+th { background: #d9eaf7; }
+.note { background: #fff2cc; border-left: 4px solid #bf9000; padding: 8pt; }
+.rule { page-break-before: always; }
+</style>
+</head>
+<body>
+<h1>Procesamiento de más de 500 HS Codes por lotes</h1>
+<p><strong>Documento compilado el 12 de octubre de 2026.</strong></p>
+
+<p><strong>La mejor solución es mantener el límite de 500 por ejecución, pero añadir una cola de lotes que permita procesar automáticamente un archivo maestro con más de 500 HS Codes.</strong> Así se conserva la restricción operativa sin limitar la cantidad total del proyecto.</p>
+
+<p>Actualmente:</p>
+<ul>
+<li><code>input_validator.py</code> rechaza archivos con más de <strong>500 líneas no vacías</strong>, incluso antes de eliminar duplicados.</li>
+<li>SQLite ya conserva el progreso de cada HS Code y de cada sección.</li>
+<li>El Excel se construye desde todos los códigos almacenados en una misma base SQLite.</li>
+<li><code>resume</code> depende parcialmente de que los códigos pendientes también estén presentes en el archivo de entrada activo.</li>
+</ul>
+<p>Esto permite varias alternativas.</p>
+
+<h2>Solución 1: lotes manuales de hasta 500 códigos</h2>
+<p>Es la alternativa más sencilla y <strong>no requiere modificar el código</strong>.</p>
+<h3>Funcionamiento</h3>
+<p>Se divide el archivo maestro en varios archivos:</p>
+<ul>
+<li><code>HS_codes_001.txt</code>: códigos 1–500.</li>
+<li><code>HS_codes_002.txt</code>: códigos 501–1000.</li>
+<li><code>HS_codes_003.txt</code>: códigos 1001–1500.</li>
+</ul>
+<p>Cada archivo se procesa individualmente, pero todos utilizan la misma base <code>sat_tariff.db</code>.</p>
+<pre>$env:SAT_INPUT_FILE="HS_codes_001.txt"
+python -m sat_tariff validate-input
+python -m sat_tariff run
+
+$env:SAT_INPUT_FILE="HS_codes_002.txt"
+python -m sat_tariff validate-input
+python -m sat_tariff run
+
+python -m sat_tariff export</pre>
+<h3>Por qué funciona</h3>
+<p>La base SQLite no se borra entre ejecuciones. Los códigos del segundo lote se agregan a los códigos del primero y la exportación lee todos los registros almacenados. La clave primaria de <code>hs_codes</code> es el propio código HS, por lo que un código repetido entre lotes no crea otra fila independiente.</p>
+<h3>Manejo de interrupciones</h3>
+<p>Si se interrumpe un lote, debe mantenerse seleccionado su archivo antes de ejecutar <code>python -m sat_tariff resume</code>. El comando actual combina los códigos pendientes en SQLite con los códigos presentes en el archivo configurado mediante <code>SAT_INPUT_FILE</code>. No debe cambiarse al archivo siguiente hasta terminar o recuperar el lote actual.</p>
+<h3>Ventajas</h3>
+<ul><li>No requiere desarrollo.</li><li>Mantiene el límite de 500.</li><li>Produce un único Excel consolidado.</li><li>Aprovecha los checkpoints existentes.</li><li>Puede aplicarse inmediatamente.</li></ul>
+<h3>Desventajas</h3>
+<ul><li>La división y selección de archivos es manual.</li><li>Puede haber errores humanos o ejecución fuera de orden.</li><li>El operador debe recordar qué archivo estaba activo al usar <code>resume</code>.</li><li>No existe un resumen global de lotes completados.</li></ul>
+<h3>Cuándo usarla</h3>
+<p>Es adecuada para necesidades ocasionales, como 600 o 1,200 códigos, o para una extracción extraordinaria que no se repetirá con frecuencia.</p>
+
+<h2>Solución 2: procesamiento automático por lotes con manifiesto</h2>
+<p><strong>Esta es la recomendación principal para una futura mejora del proyecto.</strong> Permite un archivo maestro con cualquier cantidad razonable de códigos, pero lo divide automáticamente en lotes internos de un máximo de 500.</p>
+<h3>Funcionamiento propuesto</h3>
+<pre>python -m sat_tariff prepare-batches HS_codes_master.txt
+python -m sat_tariff run-batches
+python -m sat_tariff resume-batches</pre>
+<p>El programa validaría, deduplicaría globalmente, conservaría el orden, dividiría en lotes y registraría un manifiesto con el estado de cada lote.</p>
+<table><tr><th>Lote</th><th>Códigos</th><th>Estado inicial</th></tr><tr><td>1</td><td>500</td><td>Pendiente</td></tr><tr><td>2</td><td>500</td><td>Pendiente</td></tr><tr><td>3</td><td>270</td><td>Pendiente</td></tr></table>
+<p>El manifiesto podría incluir identificador del trabajo, archivo y hash de origen, cantidad total de líneas, códigos únicos, duplicados, códigos sospechosos, lotes, lote activo, fechas y errores.</p>
+<h3>CAPTCHA y transición entre lotes</h3>
+<p>Puede continuarse automáticamente mientras la sesión siga vigente, o pausarse después de cada bloque de 500 para revisar resultados. La pausa entre lotes es la alternativa más segura porque mantiene sesiones más cortas, permite revisar errores y conserva explícitamente el límite como unidad de trabajo.</p>
+<h3>Ventajas</h3>
+<ul><li>Conserva el máximo de 500 por lote.</li><li>Reduce el trabajo manual.</li><li>Mantiene una base y un Excel consolidados.</li><li>Permite reanudar por lote y sección.</li><li>Evita omisiones y duplicación de lotes.</li><li>Ofrece trazabilidad y progreso global.</li></ul>
+<h3>Desventajas</h3>
+<ul><li>Requiere cambios en CLI, almacenamiento y pruebas.</li><li>Debe definirse la transición de navegador entre lotes.</li><li>Debe detectarse si el archivo maestro cambia.</li><li>Debe evitarse que dos procesos trabajen sobre la misma cola.</li></ul>
+
+<h2>Solución 3: cola persistente en SQLite con activación de 500 códigos</h2>
+<p>Es la alternativa más robusta para operaciones frecuentes o grandes volúmenes. El archivo se usaría para importar códigos a una cola persistente y la ejecución tomaría como máximo 500 pendientes.</p>
+<pre>python -m sat_tariff import-input HS_codes_master.txt
+python -m sat_tariff run-next --limit 500
+python -m sat_tariff queue-status</pre>
+<p>Podrían añadirse tablas <code>imports</code>, <code>batches</code> y <code>batch_items</code>. <code>resume</code> obtendría directamente de SQLite el código original, estado, secciones procesadas y lote, eliminando la dependencia del archivo activo.</p>
+<h3>Ventajas</h3>
+<ul><li>Máxima escalabilidad y trazabilidad.</li><li>El archivo no necesita permanecer disponible para reanudar.</li><li>Permite importar nuevos códigos mientras existen otros procesados.</li><li>Reduce errores manuales.</li><li>Mantiene el máximo de 500 por ejecución.</li></ul>
+<h3>Desventajas</h3>
+<ul><li>Mayor esfuerzo de implementación.</li><li>Requiere migraciones de base de datos.</li><li>Necesita reglas para importaciones repetidas y concurrencia.</li><li>Requiere más pruebas de recuperación.</li></ul>
+
+<h2>Solución 4: trabajos independientes y consolidación posterior</h2>
+<p>Cada lote tendría su propia base y su propio Excel, por ejemplo <code>sat_tariff_001.db</code>, <code>sat_tariff_002.db</code> y sus respectivos archivos de salida. Después se consolidarían.</p>
+<p>La consolidación debe reunir acuerdos, construir la unión de columnas dinámicas, mantener el orden canónico, alinear columnas como <code>DAI_BZ</code> y <code>DAI_MX</code>, deduplicar códigos y conservar las demás hojas. Es más seguro consolidar SQLite antes de generar el Excel.</p>
+
+<h2>Comparación</h2>
+<table>
+<tr><th>Alternativa</th><th>Cambios de código</th><th>Automatización</th><th>Reanudación</th><th>Escalabilidad</th></tr>
+<tr><td>Lotes manuales</td><td>Ninguno</td><td>Baja</td><td>Por archivo activo</td><td>Media</td></tr>
+<tr><td>Lotes automáticos con manifiesto</td><td>Moderados</td><td>Alta</td><td>Por lote y sección</td><td>Alta</td></tr>
+<tr><td>Cola persistente SQLite</td><td>Altos</td><td>Muy alta</td><td>Integral</td><td>Muy alta</td></tr>
+<tr><td>Bases separadas y consolidación</td><td>Moderados/altos</td><td>Media</td><td>Por trabajo</td><td>Alta</td></tr>
+</table>
+
+<h2>Recomendación</h2>
+<p>Para resolverlo inmediatamente, usar lotes manuales de hasta 500 conectados a la misma base SQLite. Para mejorar el repositorio, implementar posteriormente lotes automáticos con manifiesto. No se recomienda aumentar simplemente <code>MAX_LINES</code>, eliminar la validación, ejecutar varios navegadores paralelos contra SAT ni automatizar el CAPTCHA.</p>
+
+<div class="rule"></div>
+<h1>Implementación inmediata de la opción 1</h1>
+<p><strong>Sí. La primera opción —procesar lotes manuales de hasta 500 HS Codes utilizando una misma base SQLite— ya puede aplicarse sin modificar el código.</strong></p>
+<p>La implementación actual permite seleccionar el archivo mediante <code>SAT_INPUT_FILE</code>, acumular resultados en <code>sat_tariff.db</code>, evitar duplicados por clave primaria, conservar checkpoints y exportar todos los registros a un único Excel.</p>
+<div class="note"><strong>Importante:</strong> la extracción real debe ejecutarse en una computadora con navegador visible para resolver manualmente el CAPTCHA. GitHub Copilot App puede preparar los lotes y ejecutar pruebas offline, pero un agente cloud sin escritorio interactivo no es apropiado para el scraping real.</div>
+
+<h2>1. Actualizar el repositorio</h2>
+<pre>git switch main
+git pull origin main
+git log -1 --oneline
+
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -c "import sys; print(sys.executable)"</pre>
+<p>La ruta de Python debe incluir <code>\.venv\Scripts\python.exe</code>.</p>
+
+<h2>2. Respaldar los datos actuales</h2>
+<pre>$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+if (Test-Path "sat_tariff.db") {
+    Copy-Item "sat_tariff.db" "sat_tariff-$timestamp.db.backup"
+}
+
+if (Test-Path "sat_tariff_example.xlsx") {
+    Copy-Item "sat_tariff_example.xlsx" "sat_tariff_example-$timestamp.xlsx.backup"
+}</pre>
+<p>No elimine ni reemplace <code>sat_tariff.db</code> entre lotes: será la base compartida.</p>
+
+<h2>3. Preparar un archivo maestro</h2>
+<p>Cree <code>HS_codes_master.txt</code> con un código por línea, sin encabezados, comas ni números de fila, conservando los ceros iniciales. No lo use directamente con <code>run</code> si contiene más de 500 líneas.</p>
+
+<h2>4. Dividir automáticamente el archivo maestro</h2>
+<p>Guarde el siguiente script como <code>scripts/split-hs-codes.ps1</code>:</p>
+<pre>$sourceFile = "HS_codes_master.txt"
+$outputDirectory = "batches"
+$batchSize = 500
+
+if (-not (Test-Path $sourceFile)) {
+    throw "No se encontró el archivo $sourceFile"
+}
+
+New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+
+Get-ChildItem $outputDirectory -Filter "HS_codes_*.txt" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
+$seen = New-Object 'System.Collections.Generic.HashSet[string]'
+$codes = @(
+    foreach ($line in Get-Content $sourceFile) {
+        $code = $line.Trim()
+        if ($code -and $seen.Add($code)) {
+            $code
+        }
+    }
+)
+
+if ($codes.Count -eq 0) {
+    throw "El archivo maestro no contiene códigos HS."
+}
+
+$numberOfBatches = [Math]::Ceiling($codes.Count / $batchSize)
+$utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+
+for ($batchIndex = 0; $batchIndex -lt $numberOfBatches; $batchIndex++) {
+    $start = $batchIndex * $batchSize
+    $count = [Math]::Min($batchSize, $codes.Count - $start)
+    $batch = @($codes[$start..($start + $count - 1)])
+    $batchNumber = $batchIndex + 1
+    $filename = "HS_codes_{0:D3}.txt" -f $batchNumber
+    $relativePath = Join-Path $outputDirectory $filename
+    $absolutePath = Join-Path (Get-Location) $relativePath
+
+    [System.IO.File]::WriteAllLines(
+        $absolutePath,
+        [string[]]$batch,
+        $utf8WithoutBom
+    )
+
+    Write-Host "$relativePath`: $count códigos"
+}
+
+Write-Host ""
+Write-Host "Códigos únicos: $($codes.Count)"
+Write-Host "Lotes generados: $numberOfBatches"</pre>
+<p>Ejecútelo con:</p>
+<pre>.\scripts\split-hs-codes.ps1</pre>
+
+<h2>5. Comprobar los lotes</h2>
+<pre>Get-ChildItem .\batches\HS_codes_*.txt | ForEach-Object {
+    $count = (Get-Content $_.FullName | Where-Object { $_.Trim() }).Count
+    [PSCustomObject]@{
+        Archivo = $_.Name
+        Codigos = $count
+        Valido  = ($count -ge 1 -and $count -le 500)
+    }
+}</pre>
+<p>Todos los lotes deben mostrar <code>Valido = True</code>.</p>
+
+<h2>6. Configurar la base compartida y navegador</h2>
+<pre>$env:SAT_SQLITE_DB="sat_tariff.db"
+$env:SAT_OUTPUT_XLSX="sat_tariff_example.xlsx"
+$env:SAT_BROWSER_CHANNEL="chrome"
+python -m sat_tariff doctor
+$LASTEXITCODE</pre>
+<p>Para Microsoft Edge use <code>$env:SAT_BROWSER_CHANNEL="msedge"</code>. El código de salida esperado de <code>doctor</code> es 0.</p>
+
+<h2>7. Revisar la base antigua</h2>
+<pre>python -m sat_tariff repair-rights --dry-run</pre>
+<p>Si encuentra etiquetas posicionales antiguas:</p>
+<pre>python -m sat_tariff repair-rights</pre>
+<p>Los códigos afectados deberán estar incluidos en algún lote para reextraer <code>Derechos e impuestos</code>.</p>
+
+<h2>8. Procesar el primer lote</h2>
+<pre>$env:SAT_INPUT_FILE="batches\HS_codes_001.txt"
+$env:SAT_INPUT_FILE
+python -m sat_tariff validate-input
+python -m sat_tariff run</pre>
+<p>Cuando aparezca el CAPTCHA, resuélvalo y envíelo en el navegador. No presione Enter en PowerShell y no cierre el navegador durante el lote.</p>
+
+<h2>9. Recuperarse de una interrupción</h2>
+<p>No cambie todavía <code>SAT_INPUT_FILE</code>. Compruebe el lote activo y el estado:</p>
+<pre>$env:SAT_INPUT_FILE
+python -m sat_tariff status
+python -m sat_tariff resume</pre>
+<p>Si algunos códigos todavía no habían sido registrados en SQLite, la opción más segura es volver a ejecutar:</p>
+<pre>python -m sat_tariff run</pre>
+<p>Los códigos ya completados se detectarán en SQLite. Para errores recuperables:</p>
+<pre>python -m sat_tariff retry-failed</pre>
+
+<h2>10. Procesar los siguientes lotes</h2>
+<pre>$env:SAT_INPUT_FILE="batches\HS_codes_002.txt"
+python -m sat_tariff validate-input
+python -m sat_tariff run
+
+$env:SAT_INPUT_FILE="batches\HS_codes_003.txt"
+python -m sat_tariff validate-input
+python -m sat_tariff run</pre>
+<p>Todos los lotes deben usar la misma base <code>sat_tariff.db</code>.</p>
+
+<h2>11. Llevar control manual</h2>
+<p>Puede crear <code>batches/batch-status.csv</code>:</p>
+<pre>Lote,Archivo,Codigos,Estado,FechaInicio,FechaFin,Observaciones
+1,HS_codes_001.txt,500,Pendiente,,,
+2,HS_codes_002.txt,500,Pendiente,,,
+3,HS_codes_003.txt,270,Pendiente,,,</pre>
+<p>Estados sugeridos: Pendiente, En proceso, Interrumpido, Completado, Completado con errores y Requiere reintento.</p>
+
+<h2>12. Exportar el consolidado</h2>
+<pre>python -m sat_tariff status
+python -m sat_tariff repair-rights --dry-run
+python -m sat_tariff export
+$LASTEXITCODE</pre>
+<p>El resultado esperado es <code>Workbook written to sat_tariff_example.xlsx</code> y código de salida 0. Si devuelve 3, todavía hay identidades posicionales antiguas que deben repararse y reextraerse.</p>
+
+<h2>13. Verificar los encabezados</h2>
+<pre>python -c "from openpyxl import load_workbook; wb=load_workbook('sat_tariff_example.xlsx', read_only=True); print([c.value for c in next(wb['Derechos e impuestos'].iter_rows())]); wb.close()"</pre>
+<p>Deben aparecer columnas como <code>DAI_GENERAL</code>, <code>IVA_GENERAL</code>, <code>DAI_BZ</code>, <code>DAI_CL</code> y <code>DAI_MX</code>, dependiendo de los acuerdos encontrados. No deben aparecer <code>DAI_TABLA_*</code> ni <code>IVA_TABLA_*</code>.</p>
+
+<h2>Uso desde GitHub Copilot App</h2>
+<pre>En YairTurambar/sat-tariff-scraper, toma el archivo
+HS_codes_master.txt y divídelo en archivos de máximo 500 códigos
+únicos dentro de batches/, conservando el orden original y los
+ceros iniciales.
+
+No modifiques sat_tariff.db. No ejecutes el scraping real ni intentes
+resolver el CAPTCHA. Genera también batches/batch-status.csv y valida
+cada archivo con python -m sat_tariff validate-input usando
+SAT_INPUT_FILE.</pre>
+
+<h2>Resumen operativo</h2>
+<p>Para cada lote:</p>
+<pre>$env:SAT_INPUT_FILE="batches\HS_codes_001.txt"
+$env:SAT_SQLITE_DB="sat_tariff.db"
+$env:SAT_BROWSER_CHANNEL="chrome"
+python -m sat_tariff validate-input
+python -m sat_tariff run</pre>
+<p>Al terminar todos:</p>
+<pre>python -m sat_tariff repair-rights --dry-run
+python -m sat_tariff status
+python -m sat_tariff export</pre>
+<p><strong>Regla principal:</strong> archivos diferentes, pero siempre la misma base SQLite. Esto mantiene el límite de 500 por lote y genera un único Excel acumulado.</p>
+</body>
+</html>
