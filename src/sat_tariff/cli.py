@@ -7,7 +7,7 @@ from pathlib import Path
 import platform
 import sys
 
-from .config import load_config
+from .config import ConfigurationError, load_config
 from .extractors.rights_taxes import is_positional_identity
 from .exporters.excel import collect_positional_rights_issues, export_workbook
 from .models import ProcessingState
@@ -36,6 +36,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("run", help="Validate input and process all HS codes")
     subparsers.add_parser("resume", help="Resume unfinished HS codes from SQLite state")
     subparsers.add_parser("retry-failed", help="Reset retryable/captcha failures and process them again")
+    prepare_parser = subparsers.add_parser(
+        "prepare-batches",
+        help="Split the master HS code file into batch files of at most 500 codes plus a manifest",
+    )
+    prepare_parser.add_argument("--batch-size", type=int, default=None, help="Codes per batch (1-500)")
+    prepare_parser.add_argument("--directory", default=None, help="Directory for the generated batches")
+    run_batches_parser = subparsers.add_parser(
+        "run-batches",
+        help="Process every prepared batch in one run, with a single persistent browser session",
+    )
+    run_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
+    resume_batches_parser = subparsers.add_parser(
+        "resume-batches",
+        help="Resume every prepared batch from SQLite state, with a single persistent browser session",
+    )
+    resume_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
     return parser
 
 
@@ -61,6 +77,11 @@ def cmd_validate_input(config) -> int:
         entries, result = _validated_entries(config)
     except InputValidationError as exc:
         print(f"Input validation failed: {exc}", file=sys.stderr)
+        print(
+            "Para archivos maestros con más de 500 códigos usa "
+            "'python -m sat_tariff prepare-batches' y luego 'python -m sat_tariff run-batches'.",
+            file=sys.stderr,
+        )
         return 1
     print(f"Valid unique codes: {len(entries)}")
     print(f"Total non-empty lines: {result.total_lines}")
@@ -217,6 +238,11 @@ def _run_browser_command(config, *, resume_only: bool = False, retry_failed: boo
         return 0
     except InputValidationError as exc:
         print(f"Input validation failed: {exc}", file=sys.stderr)
+        print(
+            "Para archivos maestros con más de 500 códigos usa "
+            "'python -m sat_tariff prepare-batches' y luego 'python -m sat_tariff run-batches'.",
+            file=sys.stderr,
+        )
         return 1
     except Exception as exc:
         browser_unavailable = getattr(sys.modules.get("sat_tariff.browser"), "BrowserUnavailableError", None)
@@ -230,10 +256,124 @@ def _run_browser_command(config, *, resume_only: bool = False, retry_failed: boo
 
 
 
+def cmd_prepare_batches(config, *, batch_size: int | None = None, directory: str | None = None) -> int:
+    from .batches import BatchError, prepare_batches
+
+    try:
+        manifest = prepare_batches(config, batch_size=batch_size, directory=directory)
+    except (BatchError, InputValidationError, OSError) as exc:
+        print(f"Batch preparation failed: {exc}", file=sys.stderr)
+        return 1
+    target_dir = manifest.directory
+    print(f"Master file: {manifest.master_file}")
+    print(f"Master SHA-256: {manifest.master_sha256}")
+    print(f"Total non-empty lines: {manifest.total_lines}")
+    print(f"Unique processable codes: {manifest.total_codes}")
+    print(f"Duplicates skipped: {len(manifest.duplicates_skipped)}")
+    print(f"Suspicious codes ({manifest.invalid_line_policy} policy): {len(manifest.suspicious_codes)}")
+    print(f"Batch size: {manifest.batch_size}")
+    print(f"Batches created: {len(manifest.batches)} in {target_dir}")
+    for batch in manifest.batches:
+        print(f"  {batch.number:03d}: {batch.path} ({batch.count} códigos)")
+    print(f"Manifest written to {target_dir / 'manifest.json'}")
+    print("Ejecuta 'python -m sat_tariff run-batches' y luego 'python -m sat_tariff export'.")
+    return 0
+
+
+def _run_batches_command(config, *, resume: bool = False, directory: str | None = None) -> int:
+    from .batches import (
+        BatchError,
+        build_batch_plans,
+        load_batch_entries,
+        load_manifest,
+        verify_manifest,
+    )
+
+    batch_directory = Path(directory) if directory else config.batch_directory
+    try:
+        manifest = load_manifest(batch_directory)
+        verify_manifest(manifest)
+        # The policy recorded in the manifest is authoritative: changing
+        # SAT_INVALID_LINE_POLICY afterwards must not silently change which
+        # codes belong to the prepared set.
+        loaded = load_batch_entries(manifest)
+    except (BatchError, InputValidationError, OSError) as exc:
+        print(f"Batch manifest error: {exc}", file=sys.stderr)
+        return 1
+
+    storage = Storage(config.sqlite_db)
+    try:
+        all_entries = []
+        seen = set()
+        for _batch, entries in loaded:
+            for entry in entries:
+                if entry.normalized_code in seen:
+                    continue
+                seen.add(entry.normalized_code)
+                all_entries.append(entry)
+        # Manifest codes missing from SQLite are registered as pending without
+        # touching the state or the sections of codes stored by previous runs.
+        storage.register_codes([(entry.normalized_code, entry.raw_code) for entry in all_entries])
+        states = storage.get_states(entry.normalized_code for entry in all_entries)
+        finished = {ProcessingState.completed.value, ProcessingState.permanent_error.value}
+        already_completed = sum(1 for entry in all_entries if states.get(entry.normalized_code) in finished)
+        pending_codes = {
+            entry.normalized_code
+            for entry in all_entries
+            if states.get(entry.normalized_code) not in finished
+        }
+        plans = build_batch_plans(loaded, pending_codes)
+        total_pending = sum(len(plan.entries) for plan in plans)
+
+        print(f"Lotes en el manifiesto: {len(manifest.batches)}")
+        print(f"Total de códigos: {len(all_entries)}")
+        print(f"Completados previamente: {already_completed}")
+        if not plans:
+            print("Processed 0 HS codes.")
+            print("No quedan códigos pendientes; el navegador no se abrió.")
+            return 0
+
+        mode = "resume-batches" if resume else "run-batches"
+        print(f"{mode}: {total_pending} código(s) pendientes en {len(plans)} lote(s).")
+        from .navigation import run_navigation_batches
+
+        try:
+            run_navigation_batches(plans, config, storage, force_restart=False)
+        finally:
+            states_after = storage.get_states(entry.normalized_code for entry in all_entries)
+            processed_now = sum(
+                1
+                for entry in all_entries
+                if entry.normalized_code in pending_codes
+                and states_after.get(entry.normalized_code) == ProcessingState.completed.value
+            )
+            remaining = total_pending - processed_now
+            print(f"Processed {processed_now} HS codes.")
+            print(f"Lotes recorridos: {len(plans)}")
+            print(f"Fallidos/pendientes: {remaining}")
+            if manifest.duplicates_skipped:
+                print(f"Duplicados omitidos al preparar: {len(manifest.duplicates_skipped)}")
+            print("Consolida el Excel con 'python -m sat_tariff export'.")
+        return 0
+    except Exception as exc:
+        browser_unavailable = getattr(sys.modules.get("sat_tariff.browser"), "BrowserUnavailableError", None)
+        if browser_unavailable and isinstance(exc, browser_unavailable):
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"Command failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        storage.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigurationError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
 
     commands = {
         "validate-input": lambda: cmd_validate_input(config),
@@ -244,5 +384,14 @@ def main(argv: list[str] | None = None) -> int:
         "run": lambda: _run_browser_command(config),
         "resume": lambda: _run_browser_command(config, resume_only=True),
         "retry-failed": lambda: _run_browser_command(config, retry_failed=True),
+        "prepare-batches": lambda: cmd_prepare_batches(
+            config,
+            batch_size=getattr(args, "batch_size", None),
+            directory=getattr(args, "directory", None),
+        ),
+        "run-batches": lambda: _run_batches_command(config, directory=getattr(args, "directory", None)),
+        "resume-batches": lambda: _run_batches_command(
+            config, resume=True, directory=getattr(args, "directory", None)
+        ),
     }
     return commands[args.command]()

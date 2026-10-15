@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+from .validation.input_validator import MAX_LINES
+
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -40,6 +42,8 @@ class AppConfig:
     backup_output: bool = True
     invalid_line_policy: str = "skip"
     artifact_retention_count: int = 20
+    batch_directory: Path = Path("batches")
+    batch_size: int = MAX_LINES
 
     def ensure_directories(self) -> None:
         self.persistent_profile_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +54,10 @@ class AppConfig:
 
 
 DEFAULT_CONFIG = AppConfig()
+
+
+class ConfigurationError(ValueError):
+    """Raised when an environment value is outside the supported range."""
 
 
 
@@ -133,5 +141,15 @@ def load_config(env_file: str | Path = ".env") -> AppConfig:
         backup_output=_parse_bool(get("SAT_BACKUP_OUTPUT", str(DEFAULT_CONFIG.backup_output).lower()), DEFAULT_CONFIG.backup_output),
         invalid_line_policy=get("SAT_INVALID_LINE_POLICY", DEFAULT_CONFIG.invalid_line_policy),
         artifact_retention_count=int(get("SAT_ARTIFACT_RETENTION_COUNT", str(DEFAULT_CONFIG.artifact_retention_count))),
+        batch_directory=Path(get("SAT_BATCH_DIRECTORY", str(DEFAULT_CONFIG.batch_directory))),
+        batch_size=int(get("SAT_BATCH_SIZE", str(DEFAULT_CONFIG.batch_size))),
     )
+    validate_config(config)
     return config
+
+
+def validate_config(config: AppConfig) -> None:
+    if config.batch_size < 1 or config.batch_size > MAX_LINES:
+        raise ConfigurationError(
+            f"SAT_BATCH_SIZE must be between 1 and {MAX_LINES} (got {config.batch_size})."
+        )

@@ -105,6 +105,10 @@ Without a `.env`, offline commands still work with defaults.
 
 `HS_codes.txt` should contain 1-500 non-empty lines. Example values shipped here are fictional 10-digit numeric strings starting with `9999`.
 
+A master file with **more than 500 codes** is not processed by `run`; split it into batches with
+`prepare-batches` and process every batch in a single run with `run-batches`
+(see [Batch processing for more than 500 HS codes](#batch-processing-for-more-than-500-hs-codes)).
+
 Validation rules:
 
 - preserves leading zeroes
@@ -123,6 +127,9 @@ python -m sat_tariff doctor
 python -m sat_tariff run
 python -m sat_tariff resume
 python -m sat_tariff retry-failed
+python -m sat_tariff prepare-batches
+python -m sat_tariff run-batches
+python -m sat_tariff resume-batches
 ```
 
 ### Command notes
@@ -142,6 +149,53 @@ python -m sat_tariff retry-failed
 - `run`: validates input, opens Playwright, searches codes, persists section data
 - `resume`: processes unfinished codes from SQLite
 - `retry-failed`: resets retryable/CAPTCHA-blocked rows and tries them again
+- `prepare-batches`: splits the master file into `HS_codes_001.txt`, `HS_codes_002.txt`, … plus a
+  versioned `manifest.json` inside `SAT_BATCH_DIRECTORY`. Accepts `--batch-size` and `--directory`
+- `run-batches`: processes every prepared batch in one run, with a single persistent browser session.
+  Accepts `--directory` to point at a batch set outside `SAT_BATCH_DIRECTORY`
+- `resume-batches`: same as `run-batches` but driven by the manifest plus SQLite state, so it resumes
+  across batch boundaries without changing `SAT_INPUT_FILE`. Also accepts `--directory`
+
+## Batch processing for more than 500 HS codes
+
+The 500-code limit stays a hard limit **per file**. Batching keeps it while processing a master file
+of any size in a single run and a single Chrome session:
+
+```powershell
+$env:SAT_BROWSER_CHANNEL="chrome"
+python -m sat_tariff prepare-batches
+python -m sat_tariff run-batches
+python -m sat_tariff export
+```
+
+Recovery after an interruption:
+
+```powershell
+python -m sat_tariff resume-batches
+python -m sat_tariff export
+```
+
+- Chrome is opened **once** and closed once; it is never restarted between batches, so cookies, the
+  persistent profile, the validated `frmBuscar` form and the solved CAPTCHA survive batch boundaries.
+- Chrome stays open only while the same `run-batches`/`resume-batches` command keeps running. If the
+  process ends or the machine reboots, the browser closes and SAT may ask for a CAPTCHA again on
+  resume. The CAPTCHA is always solved manually in the browser.
+- `run-batches`/`resume-batches` verify the SHA-256 of the master file and of every batch before
+  opening the browser; a stale manifest fails with an actionable message instead of processing old
+  batches. They never regenerate batches on their own.
+- Codes already `completed` in SQLite are not re-extracted, and manifest codes still missing from
+  SQLite are processed. When nothing is pending, the browser is not opened at all.
+- Export stays an explicit step: `python -m sat_tariff export`.
+
+Progress mixes global and per-batch counters:
+
+```text
+Lote 2/16 — 500 códigos
+[global 501/7578 | lote 1/500] HS 1234567890
+```
+
+Settings: `SAT_BATCH_DIRECTORY` (default `batches`) and `SAT_BATCH_SIZE` (default and maximum 500).
+Full details in [docs/procesamiento-por-lotes.md](docs/procesamiento-por-lotes.md).
 
 ## Manual CAPTCHA flow
 

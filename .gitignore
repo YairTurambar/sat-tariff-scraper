@@ -40,6 +40,9 @@ artifacts/**/*.html
 artifacts/**/*.json
 artifacts/**/*.txt
 
+# Generated batch files and manifest (rebuilt with 'prepare-batches')
+batches/
+
 # Runtime folders
 .cache/
 .mypy_cache/

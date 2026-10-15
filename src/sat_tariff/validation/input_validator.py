@@ -39,13 +39,26 @@ def classify_hs_code(raw_code: str) -> tuple[str, bool, list[str]]:
 
 
 
-def validate_hs_codes(lines: list[str], invalid_policy: str = "skip") -> InputValidationResult:
+def validate_hs_codes(
+    lines: list[str],
+    invalid_policy: str = "skip",
+    *,
+    max_lines: int | None = MAX_LINES,
+) -> InputValidationResult:
+    """Validate HS code lines.
+
+    ``max_lines`` keeps the per-file limit of :data:`MAX_LINES` for the regular
+    commands. Batch preparation reads a master file that is intentionally larger
+    than a single batch and passes ``max_lines=None``; the generated batch files
+    are validated again with the default limit.
+    """
+
     stripped = [line.strip() for line in lines if line.strip()]
     total_lines = len(stripped)
     if total_lines == 0:
         raise InputValidationError("HS_codes.txt must contain at least 1 non-empty line.")
-    if total_lines > MAX_LINES:
-        raise InputValidationError(f"HS_codes.txt exceeds the maximum of {MAX_LINES} non-empty lines.")
+    if max_lines is not None and total_lines > max_lines:
+        raise InputValidationError(f"HS_codes.txt exceeds the maximum of {max_lines} non-empty lines.")
 
     duplicate_codes: list[str] = []
     suspicious_codes: list[str] = []
@@ -73,7 +86,12 @@ def validate_hs_codes(lines: list[str], invalid_policy: str = "skip") -> InputVa
 
 
 
-def validate_hs_code_file(path: str | Path, invalid_policy: str = "skip") -> InputValidationResult:
+def validate_hs_code_file(
+    path: str | Path,
+    invalid_policy: str = "skip",
+    *,
+    max_lines: int | None = MAX_LINES,
+) -> InputValidationResult:
     file_path = Path(path)
     lines = file_path.read_text(encoding="utf-8").splitlines()
-    return validate_hs_codes(lines, invalid_policy=invalid_policy)
+    return validate_hs_codes(lines, invalid_policy=invalid_policy, max_lines=max_lines)
