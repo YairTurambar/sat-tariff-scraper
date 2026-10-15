@@ -149,13 +149,13 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def _clear_managed_batch_files(directory: Path) -> None:
-    """Remove only the files this tool generates, never arbitrary files."""
+def _remove_stale_batch_files(directory: Path, keep: set[str]) -> None:
+    """Remove only the batch files this tool generates, never arbitrary files."""
 
     if not directory.exists():
         return
     for item in directory.iterdir():
-        if item.is_file() and (BATCH_FILENAME_PATTERN.match(item.name) or item.name == MANIFEST_FILENAME):
+        if item.is_file() and BATCH_FILENAME_PATTERN.match(item.name) and item.name not in keep:
             item.unlink()
 
 
@@ -185,7 +185,6 @@ def prepare_batches(
 
     target_dir = Path(directory) if directory is not None else Path(config.batch_directory)
     target_dir.mkdir(parents=True, exist_ok=True)
-    _clear_managed_batch_files(target_dir)
 
     chunks = chunk_entries(entries, size)
     batches: list[BatchInfo] = []
@@ -198,6 +197,11 @@ def prepare_batches(
         batches.append(
             BatchInfo(number=number, path=file_name, count=len(chunk), sha256=sha256_file(batch_path))
         )
+
+    # Stale batch files from a previous, larger preparation are dropped only
+    # after the new set was written and validated. The manifest is published
+    # last, so a failure never leaves a manifest pointing at missing batches.
+    _remove_stale_batch_files(target_dir, {batch.path for batch in batches})
 
     manifest = BatchManifest(
         version=MANIFEST_VERSION,
@@ -218,6 +222,16 @@ def prepare_batches(
         json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2) + "\n",
     )
     return manifest
+
+
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validated_sha256(value: object, batch_path: object) -> str:
+    text = str(value or "").strip().lower()
+    if not _SHA256_PATTERN.match(text):
+        raise ValueError(f"el lote '{batch_path}' no tiene un SHA-256 válido")
+    return text
 
 
 def manifest_path_for(directory: Path | str) -> Path:
@@ -249,7 +263,7 @@ def load_manifest(directory: Path | str) -> BatchManifest:
                 number=int(item["number"]),
                 path=str(item["path"]),
                 count=int(item["count"]),
-                sha256=str(item.get("sha256", "")),
+                sha256=_validated_sha256(item.get("sha256"), item.get("path")),
             )
             for item in payload["batches"]
         ]
@@ -290,7 +304,7 @@ def verify_manifest(manifest: BatchManifest) -> None:
         batch_path = manifest.batch_path(batch)
         if not batch_path.exists():
             raise ManifestError(f"Falta el archivo de lote '{batch_path}'. {REPREPARE_HINT}")
-        if batch.sha256 and sha256_file(batch_path) != batch.sha256:
+        if sha256_file(batch_path) != batch.sha256:
             raise ManifestError(f"El archivo de lote '{batch_path}' fue modificado. {REPREPARE_HINT}")
 
 

@@ -151,9 +151,10 @@ python -m sat_tariff resume-batches
 - `retry-failed`: resets retryable/CAPTCHA-blocked rows and tries them again
 - `prepare-batches`: splits the master file into `HS_codes_001.txt`, `HS_codes_002.txt`, … plus a
   versioned `manifest.json` inside `SAT_BATCH_DIRECTORY`. Accepts `--batch-size` and `--directory`
-- `run-batches`: processes every prepared batch in one run, with a single persistent browser session
+- `run-batches`: processes every prepared batch in one run, with a single persistent browser session.
+  Accepts `--directory` to point at a batch set outside `SAT_BATCH_DIRECTORY`
 - `resume-batches`: same as `run-batches` but driven by the manifest plus SQLite state, so it resumes
-  across batch boundaries without changing `SAT_INPUT_FILE`
+  across batch boundaries without changing `SAT_INPUT_FILE`. Also accepts `--directory`
 
 ## Batch processing for more than 500 HS codes
 

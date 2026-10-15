@@ -347,6 +347,18 @@ def test_missing_batch_file_fails_before_opening_the_browser(tmp_path, monkeypat
     assert recorder.enter_count == 0
 
 
+def test_run_batches_accepts_an_explicit_directory(tmp_path, monkeypatch, capsys, fake_env):
+    _page, recorder, _services = fake_env
+    config = batch_config(tmp_path, total=2, batch_size=1)
+    prepare_cli_env(monkeypatch, config)
+    monkeypatch.setenv("SAT_BATCH_DIRECTORY", str(tmp_path / "otro-directorio"))
+
+    assert cli.main(["run-batches", "--directory", str(config.batch_directory)]) == 0
+
+    assert "Processed 2 HS codes." in capsys.readouterr().out
+    assert recorder.enter_count == 1
+
+
 def test_run_navigation_batches_reuses_one_service(tmp_path, monkeypatch, fake_env):
     page, recorder, services = fake_env
     config = batch_config(tmp_path, total=4, batch_size=2)

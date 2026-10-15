@@ -42,14 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prepare_parser.add_argument("--batch-size", type=int, default=None, help="Codes per batch (1-500)")
     prepare_parser.add_argument("--directory", default=None, help="Directory for the generated batches")
-    subparsers.add_parser(
+    run_batches_parser = subparsers.add_parser(
         "run-batches",
         help="Process every prepared batch in one run, with a single persistent browser session",
     )
-    subparsers.add_parser(
+    run_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
+    resume_batches_parser = subparsers.add_parser(
         "resume-batches",
         help="Resume every prepared batch from SQLite state, with a single persistent browser session",
     )
+    resume_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
     return parser
 
 
@@ -259,7 +261,7 @@ def cmd_prepare_batches(config, *, batch_size: int | None = None, directory: str
 
     try:
         manifest = prepare_batches(config, batch_size=batch_size, directory=directory)
-    except (BatchError, InputValidationError) as exc:
+    except (BatchError, InputValidationError, OSError) as exc:
         print(f"Batch preparation failed: {exc}", file=sys.stderr)
         return 1
     target_dir = manifest.directory
@@ -278,7 +280,7 @@ def cmd_prepare_batches(config, *, batch_size: int | None = None, directory: str
     return 0
 
 
-def _run_batches_command(config, *, resume: bool = False) -> int:
+def _run_batches_command(config, *, resume: bool = False, directory: str | None = None) -> int:
     from .batches import (
         BatchError,
         build_batch_plans,
@@ -287,11 +289,15 @@ def _run_batches_command(config, *, resume: bool = False) -> int:
         verify_manifest,
     )
 
+    batch_directory = Path(directory) if directory else config.batch_directory
     try:
-        manifest = load_manifest(config.batch_directory)
+        manifest = load_manifest(batch_directory)
         verify_manifest(manifest)
-        loaded = load_batch_entries(manifest, invalid_policy=config.invalid_line_policy)
-    except (BatchError, InputValidationError) as exc:
+        # The policy recorded in the manifest is authoritative: changing
+        # SAT_INVALID_LINE_POLICY afterwards must not silently change which
+        # codes belong to the prepared set.
+        loaded = load_batch_entries(manifest)
+    except (BatchError, InputValidationError, OSError) as exc:
         print(f"Batch manifest error: {exc}", file=sys.stderr)
         return 1
 
@@ -383,7 +389,9 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=getattr(args, "batch_size", None),
             directory=getattr(args, "directory", None),
         ),
-        "run-batches": lambda: _run_batches_command(config),
-        "resume-batches": lambda: _run_batches_command(config, resume=True),
+        "run-batches": lambda: _run_batches_command(config, directory=getattr(args, "directory", None)),
+        "resume-batches": lambda: _run_batches_command(
+            config, resume=True, directory=getattr(args, "directory", None)
+        ),
     }
     return commands[args.command]()

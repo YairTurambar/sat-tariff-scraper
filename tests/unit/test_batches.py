@@ -186,6 +186,26 @@ def test_incompatible_manifest_version_fails(tmp_path):
         load_manifest(config.batch_directory)
 
 
+def test_manifest_without_a_valid_batch_hash_fails(tmp_path):
+    config = make_config(tmp_path, codes(3))
+    prepare_batches(config)
+    path = config.batch_directory / "manifest.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["batches"][0].pop("sha256")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ManifestError):
+        load_manifest(config.batch_directory)
+
+
+def test_manifest_records_the_invalid_line_policy_used(tmp_path):
+    config = make_config(tmp_path, ["0101210000", "ABC"], invalid_line_policy="process")
+    prepare_batches(config)
+    manifest = load_manifest(config.batch_directory)
+    assert manifest.invalid_line_policy == "process"
+    # Loading uses the recorded policy, not the caller's current setting.
+    assert len(manifest_entries(manifest)) == 2
+
+
 def test_missing_or_corrupt_manifest_fails(tmp_path):
     with pytest.raises(ManifestError):
         load_manifest(tmp_path / "batches")

@@ -60,7 +60,12 @@ Lee el archivo maestro (`SAT_INPUT_FILE`, por defecto `HS_codes.txt`) y:
   (`HS_codes_NNN.txt` y `manifest.json`); cualquier otro archivo del directorio se conserva;
 - genera `manifest.json`.
 
-Opciones: `--batch-size N` y `--directory RUTA`.
+Opciones: `--batch-size N` y `--directory RUTA`. `run-batches` y `resume-batches` aceptan el mismo
+`--directory RUTA` para trabajar con un conjunto de lotes fuera de `SAT_BATCH_DIRECTORY`.
+
+Los archivos de lote obsoletos de una preparación anterior se eliminan **después** de escribir y
+validar el conjunto nuevo, y el manifiesto se publica al final: un fallo nunca deja un manifiesto
+apuntando a lotes inexistentes.
 
 ## Formato del manifiesto
 
@@ -88,7 +93,12 @@ Opciones: `--batch-size N` y `--directory RUTA`.
   resuelve desde el directorio de trabajo.
 - El manifiesto describe **qué** códigos deben procesarse; SQLite sigue siendo la única fuente de
   verdad sobre **qué ya se procesó**. El manifiesto no almacena estado operativo por lote.
-- `manifest.json` se escribe de forma atómica (archivo temporal + `os.replace`).
+- `manifest.json` se escribe de forma atómica (archivo temporal + `os.replace`), igual que los
+  archivos de lote.
+- Cada lote debe declarar un SHA-256 válido de 64 caracteres; un manifiesto sin ese hash se rechaza,
+  de modo que la verificación de integridad no puede desactivarse editando el archivo.
+- La política de líneas inválidas registrada en el manifiesto es la autoritativa al cargar los lotes:
+  cambiar `SAT_INVALID_LINE_POLICY` después de preparar no altera silenciosamente el conjunto.
 
 ## `run-batches` y `resume-batches`
 
