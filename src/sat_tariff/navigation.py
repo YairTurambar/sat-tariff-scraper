@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 import re
 import time
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from bs4 import BeautifulSoup
 
@@ -31,6 +31,9 @@ from .selectors import (
     section_submit_selectors,
 )
 from .storage import Storage
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .batches import BatchPlan
 
 logger = logging.getLogger("sat_tariff.navigation")
 SECTION_PARSERS: dict[str, Callable[[str], object]] = {
@@ -434,32 +437,73 @@ class NavigationService:
         self.storage.update_state(entry.normalized_code, ProcessingState.completed)
         self.announce("Checkpoint guardado.")
 
+    def _process_with_retries(
+        self,
+        entry: HsCodeEntry,
+        *,
+        position: str,
+        force_restart: bool,
+    ) -> Exception | None:
+        """Process a single entry, returning the last error instead of raising."""
+
+        last_error: Exception | None = None
+        for attempt in range(1, self.config.max_retries + 2):
+            try:
+                self.process_code(entry, force_restart=force_restart, position=position)
+                last_error = None
+                break
+            except CaptchaTimeoutError:
+                # Nobody solved the CAPTCHA: retrying is pointless and would
+                # only hammer the portal. Stop with a resumable state.
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt > self.config.max_retries:
+                    break
+                self.sleep(self.config.retry_backoff_factor * attempt)
+        if last_error is not None:
+            logger.error("HS %s failed: %s", entry.normalized_code, last_error)
+        if self.config.delay_between_codes_seconds > 0:
+            self.sleep(self.config.delay_between_codes_seconds)
+        return last_error
+
     def process_entries(self, entries: list[HsCodeEntry], *, force_restart: bool = False) -> None:
         self.open_portal()
         total = len(entries)
         failures: list[Exception] = []
         for index, entry in enumerate(entries, start=1):
-            position = f"[{index}/{total}] "
-            last_error: Exception | None = None
-            for attempt in range(1, self.config.max_retries + 2):
-                try:
-                    self.process_code(entry, force_restart=force_restart, position=position)
-                    last_error = None
-                    break
-                except CaptchaTimeoutError:
-                    # Nobody solved the CAPTCHA: retrying is pointless and would
-                    # only hammer the portal. Stop with a resumable state.
-                    raise
-                except Exception as exc:
-                    last_error = exc
-                    if attempt > self.config.max_retries:
-                        break
-                    self.sleep(self.config.retry_backoff_factor * attempt)
-            if last_error is not None:
-                logger.error("HS %s failed: %s", entry.normalized_code, last_error)
-                failures.append(last_error)
-            if self.config.delay_between_codes_seconds > 0:
-                self.sleep(self.config.delay_between_codes_seconds)
+            error = self._process_with_retries(
+                entry, position=f"[{index}/{total}] ", force_restart=force_restart
+            )
+            if error is not None:
+                failures.append(error)
+        if failures:
+            raise failures[0]
+
+    def process_batches(self, batches: "list[BatchPlan]", *, force_restart: bool = False) -> None:
+        """Process every batch sequentially inside the same browser session.
+
+        The portal is opened once: no ``page.goto()`` happens between batches, so
+        cookies, the persistent profile, the validated ``frmBuscar`` form and the
+        already solved CAPTCHA survive the batch boundaries.
+        """
+
+        self.open_portal()
+        total_codes = sum(len(batch.entries) for batch in batches)
+        total_batches = len(batches)
+        failures: list[Exception] = []
+        global_index = 0
+        for batch_index, batch in enumerate(batches, start=1):
+            batch_total = getattr(batch, "total_batches", total_batches) or total_batches
+            batch_number = getattr(batch, "number", batch_index)
+            pending = len(batch.entries)
+            self.announce(f"Lote {batch_number}/{batch_total} — {pending} códigos")
+            for position_in_batch, entry in enumerate(batch.entries, start=1):
+                global_index += 1
+                position = f"[global {global_index}/{total_codes} | lote {position_in_batch}/{pending}] "
+                error = self._process_with_retries(entry, position=position, force_restart=force_restart)
+                if error is not None:
+                    failures.append(error)
         if failures:
             raise failures[0]
 
@@ -467,3 +511,16 @@ class NavigationService:
 def run_navigation(entries: list[HsCodeEntry], config: AppConfig, storage: Storage, *, force_restart: bool = False) -> None:
     with BrowserSession(config) as browser_session:
         NavigationService(config=config, storage=storage, browser_session=browser_session).process_entries(entries, force_restart=force_restart)
+
+
+def run_navigation_batches(batches: "list[BatchPlan]", config: AppConfig, storage: Storage, *, force_restart: bool = False) -> None:
+    """Run every prepared batch with a single ``BrowserSession``.
+
+    Chrome is opened exactly once and closed once, at the end of the command or
+    when a definitive exception propagates.
+    """
+
+    with BrowserSession(config) as browser_session:
+        NavigationService(config=config, storage=storage, browser_session=browser_session).process_batches(
+            batches, force_restart=force_restart
+        )

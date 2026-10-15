@@ -217,6 +217,44 @@ class Storage:
                 )
         return len(unique_codes)
 
+    def register_codes(self, pairs: Iterable[tuple[str, str]]) -> int:
+        """Insert codes that are not stored yet, leaving existing rows untouched.
+
+        Batch commands register every manifest code without resetting the state
+        or the sections already persisted for codes seen in previous runs.
+        """
+
+        now = self._now()
+        inserted = 0
+        with self.transaction() as conn:
+            for code, raw_code in pairs:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO hs_codes(code, raw_code, state, attempts, last_error, created_at, updated_at)
+                    VALUES(?, ?, ?, 0, NULL, ?, ?)
+                    ON CONFLICT(code) DO NOTHING
+                    """,
+                    (code, raw_code, ProcessingState.pending.value, now, now),
+                )
+                inserted += cursor.rowcount or 0
+        return inserted
+
+    def get_states(self, codes: Iterable[str]) -> dict[str, str]:
+        """Return the stored state of each requested code, if any."""
+
+        unique_codes = list(dict.fromkeys(codes))
+        states: dict[str, str] = {}
+        chunk_size = 500
+        for start in range(0, len(unique_codes), chunk_size):
+            chunk = unique_codes[start : start + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self.connection.execute(
+                f"SELECT code, state FROM hs_codes WHERE code IN ({placeholders})", chunk
+            ).fetchall()
+            for row in rows:
+                states[row["code"]] = row["state"]
+        return states
+
     def get_status_summary(self) -> dict[str, int]:
         rows = self.connection.execute(
             "SELECT state, COUNT(*) AS total FROM hs_codes GROUP BY state ORDER BY state"

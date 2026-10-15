@@ -14,8 +14,10 @@ def make_db_path() -> Path:
 
 
 
-def test_validate_input_command_does_not_import_playwright(monkeypatch, capsys):
-    monkeypatch.setenv("SAT_INPUT_FILE", "HS_codes.txt")
+def test_validate_input_command_does_not_import_playwright(monkeypatch, capsys, tmp_path):
+    input_file = tmp_path / "HS_codes.txt"
+    input_file.write_text("0101210000\n0101290000\n", encoding="utf-8")
+    monkeypatch.setenv("SAT_INPUT_FILE", str(input_file))
     monkeypatch.setenv("SAT_INVALID_LINE_POLICY", "skip")
     sys.modules.pop("playwright", None)
     rc = cli.main(["validate-input"])
@@ -23,6 +25,21 @@ def test_validate_input_command_does_not_import_playwright(monkeypatch, capsys):
     assert rc == 0
     assert "Valid unique codes" in out
     assert "playwright" not in sys.modules
+
+
+def test_validate_input_rejects_a_master_file_above_the_limit(monkeypatch, capsys, tmp_path):
+    """The 500-code limit per file stays; batching is the documented way out."""
+
+    input_file = tmp_path / "HS_codes.txt"
+    input_file.write_text("".join(f"{index:010d}\n" for index in range(501)), encoding="utf-8")
+    monkeypatch.setenv("SAT_INPUT_FILE", str(input_file))
+
+    rc = cli.main(["validate-input"])
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "maximum of 500" in err
+    assert "prepare-batches" in err
 
 
 
