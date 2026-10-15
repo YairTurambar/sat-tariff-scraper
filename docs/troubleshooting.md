@@ -124,6 +124,48 @@ The SQLite database has no stored rows yet, or only empty section data.
 
 `completed` and `permanent_error` rows are not resumed automatically.
 
+## `HS_codes.txt exceeds the maximum of 500 non-empty lines.`
+
+The per-file limit is intentional. Split the master file and process every batch in one run:
+
+```powershell
+python -m sat_tariff prepare-batches
+python -m sat_tariff run-batches
+python -m sat_tariff export
+```
+
+## `Batch manifest error: ... Vuelve a ejecutar 'python -m sat_tariff prepare-batches'.`
+
+`run-batches`/`resume-batches` refuse to process a stale or damaged batch set and fail **before**
+opening the browser. Causes:
+
+- `manifest.json` is missing, corrupt or uses an incompatible version;
+- the master file changed after the batches were prepared (SHA-256 mismatch);
+- a batch file is missing or was edited by hand.
+
+Run `python -m sat_tariff prepare-batches` again and then `python -m sat_tariff run-batches`.
+Batches are never regenerated automatically.
+
+## `Configuration error: SAT_BATCH_SIZE must be between 1 and 500`
+
+`SAT_BATCH_SIZE` cannot exceed the per-file limit. Unset it or lower it:
+
+```powershell
+Remove-Item Env:SAT_BATCH_SIZE -ErrorAction SilentlyContinue
+```
+
+## Chrome closed between batches / SAT asks for the CAPTCHA again
+
+Chrome stays open only while the same `run-batches`/`resume-batches` process keeps running. If the
+command ended, the terminal was closed or the machine rebooted, the browser was closed too and SAT
+may show a new CAPTCHA. Checkpoints are preserved; run `python -m sat_tariff resume-batches`, solve
+the CAPTCHA once in the browser and the remaining batches continue in the same session.
+
+## `run-batches` reports `Processed 0 HS codes.`
+
+Every manifest code is already `completed` (or `permanent_error`) in SQLite, so the browser is not
+opened. Build the workbook with `python -m sat_tariff export`.
+
 ## Visual comparison is skipped
 
 `tests/visual/` self-skips with the exact reason. The usual fixes:

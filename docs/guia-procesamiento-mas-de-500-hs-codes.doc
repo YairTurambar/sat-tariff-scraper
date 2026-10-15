@@ -22,6 +22,14 @@ th { background: #d9eaf7; }
 <body>
 <h1>Procesamiento de más de 500 HS Codes por lotes</h1>
 <p><strong>Documento compilado el 12 de octubre de 2026.</strong></p>
+<div class="note">
+<p><strong>Actualización:</strong> la solución 2 (cola automática de lotes) ya está implementada.
+Usa <code>python -m sat_tariff prepare-batches</code>, <code>python -m sat_tariff run-batches</code>
+y <code>python -m sat_tariff export</code>. Todos los lotes se procesan en una sola ejecución y con
+una sola sesión persistente de Chrome, sin cerrar ni volver a abrir el navegador al cruzar de un
+lote al siguiente. El límite de 500 códigos por archivo se mantiene. Consulta
+<code>docs/procesamiento-por-lotes.md</code> para la guía vigente.</p>
+</div>
 
 <p><strong>La mejor solución es mantener el límite de 500 por ejecución, pero añadir una cola de lotes que permita procesar automáticamente un archivo maestro con más de 500 HS Codes.</strong> Así se conserva la restricción operativa sin limitar la cantidad total del proyecto.</p>
 
