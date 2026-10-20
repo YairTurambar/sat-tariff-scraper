@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -110,7 +110,12 @@ def test_discovery_on_windows_uses_program_files(tmp_path):
     assert found == [str(chrome)]
 
 
-def test_discovery_on_macos_uses_applications():
+@pytest.fixture(params=[Path, PureWindowsPath], ids=["native-host", "windows-host"])
+def discovery_host_paths(request, monkeypatch):
+    monkeypatch.setattr(discovery_module, "Path", request.param)
+
+
+def test_discovery_on_macos_uses_applications(discovery_host_paths):
     existing = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     found = discover_system_browsers(
         platform_name="darwin",
@@ -121,7 +126,7 @@ def test_discovery_on_macos_uses_applications():
     assert found == [existing]
 
 
-def test_discovery_on_linux_uses_path_lookup():
+def test_discovery_on_linux_uses_path_lookup(discovery_host_paths):
     found = discover_system_browsers(
         platform_name="linux",
         environ={},
@@ -131,15 +136,41 @@ def test_discovery_on_linux_uses_path_lookup():
     assert found == ["/usr/local/bin/chromium"]
 
 
-def test_discovery_prefers_extra_candidates_and_deduplicates():
+def test_discovery_prefers_extra_candidates_and_deduplicates(discovery_host_paths):
     found = discover_system_browsers(
         platform_name="linux",
         environ={},
         which=lambda name: "/usr/bin/chromium" if name == "chromium" else None,
         is_file=lambda path: str(path) in {"/custom/chrome", "/usr/bin/chromium"},
-        extra_candidates=("/custom/chrome", "/missing/chrome"),
+        extra_candidates=("/custom/chrome", "/missing/chrome", "/custom/chrome"),
     )
     assert found == ["/custom/chrome", "/usr/bin/chromium"]
+
+
+def test_discovery_preserves_windows_candidates(discovery_host_paths):
+    executable = r"C:\Custom Chrome\chrome.exe"
+    found = discover_system_browsers(
+        platform_name="win32",
+        environ={},
+        which=lambda name: executable if name == "chrome" else None,
+        is_file=lambda path: path == executable,
+        extra_candidates=(executable, executable, r"C:\missing\chrome.exe"),
+    )
+    assert found == [executable]
+
+
+@pytest.mark.parametrize("as_string", [False, True], ids=["pathlike", "string"])
+def test_discovery_default_check_requires_real_file(tmp_path, as_string):
+    executable = tmp_path / "chrome"
+    executable.write_text("binary", encoding="utf-8")
+    candidate = str(executable) if as_string else executable
+    found = discover_system_browsers(
+        platform_name="win32",
+        environ={},
+        which=lambda name: None,
+        extra_candidates=(candidate, tmp_path / "missing", tmp_path, candidate),
+    )
+    assert found == [str(executable)]
 
 
 def test_find_managed_chromium_detects_installed_binary(tmp_path):
