@@ -68,9 +68,9 @@ MANAGED_RELATIVE_EXECUTABLES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _is_existing_file(path: Path) -> bool:
+def _is_existing_file(path: str | os.PathLike[str]) -> bool:
     try:
-        return path.is_file()
+        return Path(path).is_file()
     except OSError:  # pragma: no cover - defensive, unreadable paths
         return False
 
@@ -96,7 +96,7 @@ def discover_system_browsers(
     environ: Mapping[str, str] | None = None,
     which=shutil.which,
     is_file=_is_existing_file,
-    extra_candidates: Sequence[str] = (),
+    extra_candidates: Sequence[str | os.PathLike[str]] = (),
 ) -> list[str]:
     """Return existing Chromium-compatible executables, best candidates first."""
 
@@ -105,15 +105,14 @@ def discover_system_browsers(
 
     found: list[str] = []
 
-    def _add(candidate: str | None) -> None:
+    def _add(candidate: str | os.PathLike[str] | None) -> None:
         if not candidate:
             return
-        path = Path(candidate)
+        path = os.fspath(candidate)
         if not is_file(path):
             return
-        resolved = str(path)
-        if resolved not in found:
-            found.append(resolved)
+        if path not in found:
+            found.append(path)
 
     for candidate in extra_candidates:
         _add(candidate)
