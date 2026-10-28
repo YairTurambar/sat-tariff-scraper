@@ -64,6 +64,44 @@ def test_quotas_match_reordered_headers_and_ignore_layout_tables():
     assert len(single.rows) == 1
 
 
+@pytest.mark.parametrize("old,new", [
+    ("<th>Inicio vigencia</th>", "<th>Inicio desconocido</th>"),
+    ("<td>Guatemala</td>", ""),
+    ("<td>Guatemala</td>", '<td colspan="2">Guatemala</td>'),
+])
+def test_malformed_quota_tables_are_recoverable_errors(old, new):
+    html = read_fixture("quotas_structured.html").replace(old, new)
+    result = parse_quotas(html)
+    assert result.status == "extraction_error"
+    assert result.rows == []
+    assert result.message
+
+
+@pytest.mark.parametrize("old,new", [
+    ("<th>País</th>", "<th>Origen desconocido</th>"),
+    ("<th>Cuota</th>", "<th>Identificador desconocido</th>"),
+])
+def test_mixed_valid_and_invalid_quota_tables_cannot_checkpoint_partial_results(old, new):
+    html = read_fixture("quotas_structured.html")
+    result = parse_quotas(html + html.replace(old, new))
+    assert result.status == "extraction_error"
+    assert result.rows == []
+    assert result.message == "Quota headers not recognized"
+
+
+def test_empty_captioned_goods_table_does_not_borrow_unit_rows():
+    html = (
+        "<table><caption>Código de Mercancías</caption>"
+        "<tr><th>Código</th><th>Descripción</th></tr></table>"
+        "<table><caption>Unidades de medida</caption>"
+        "<tr><th>Código</th><th>Descripción</th></tr>"
+        "<tr><td>KGM</td><td>Kilogramo</td></tr></table>"
+    )
+    result = parse_nomenclature(html)
+    assert result.status == "ok"
+    assert [row.record_type for row in result.rows] == ["unit"]
+
+
 def test_nomenclature_caption_headers_and_partial_scalars():
     result = parse_nomenclature(read_fixture("nomenclature_caption.html"))
     assert result.status == "ok"
@@ -71,6 +109,10 @@ def test_nomenclature_caption_headers_and_partial_scalars():
     assert result.rows[0].code == "0210.11.0000"
     assert result.rows[1].unit_code == "KGM"
     assert all(row.section == "Sección I" for row in result.rows)
+    assert all(
+        row.additional_codes_text == "No se han encontrado códigos adicionales asociados al inciso consultado"
+        for row in result.rows
+    )
     partial = parse_nomenclature(read_fixture("nomenclature_partial.html"))
     assert partial.status == "ok"
     assert partial.rows[0].record_type == "summary"

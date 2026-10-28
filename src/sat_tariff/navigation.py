@@ -435,8 +435,7 @@ class NavigationService:
                         _digits(record.code) for record in result.rows
                         if getattr(record, "record_type", "") == "goods" and getattr(record, "code", "")
                     ]
-                    full_codes = [code for code in goods_codes if len(code) == len(_digits(entry.normalized_code))]
-                    if full_codes and _digits(entry.normalized_code) not in full_codes:
+                    if any(not _digits(entry.normalized_code).startswith(code) for code in goods_codes):
                         raise SectionNavigationError(f"nomenclature: goods code does not match HS {entry.normalized_code}")
                 self.storage.save_section_rows(entry.normalized_code, section, result.rows, section_status=result.status)
                 self.storage.update_state(entry.normalized_code, SECTION_PROGRESS[section])

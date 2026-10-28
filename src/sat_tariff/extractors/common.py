@@ -88,7 +88,9 @@ def table_to_dicts(table: Tag) -> list[dict[str, str]]:
     return extracted
 
 
-def table_to_labeled_dicts(table: Tag, required_headers: tuple[str, ...]) -> list[dict[str, str]]:
+def table_to_labeled_dicts(
+    table: Tag, required_headers: tuple[str, ...], *, strict_width: bool = False,
+) -> list[dict[str, str]]:
     """Read a leaf table by normalized headers, including a preceding title row."""
     required = {ascii_upper(normalize_label(header)) for header in required_headers}
     rows = direct_rows(table)
@@ -103,6 +105,8 @@ def table_to_labeled_dicts(table: Tag, required_headers: tuple[str, ...]) -> lis
                 continue
             values = [cell_text(cell) for cell in cells]
             if any(values):
+                if strict_width and (len(cells) != len(headers) or any(cell.get("colspan", "1") != "1" for cell in cells)):
+                    raise ValueError("SAT table row does not match its headers")
                 extracted.append({header: values[i] if i < len(values) else "" for i, header in enumerate(headers)})
         return extracted
     return []
@@ -172,7 +176,7 @@ def find_table_after_label(soup: BeautifulSoup, label: str, stop_labels: tuple[s
     stop_set = {normalize_label(item) for item in stop_labels if item != label}
     if anchor is not None:
         parent_table = anchor.find_parent("table")
-        if parent_table is not None and table_to_labeled_dicts(parent_table, ("Código", "Descripción")):
+        if parent_table is not None and (anchor.name == "caption" or table_to_labeled_dicts(parent_table, ("Código", "Descripción"))):
             return parent_table
         for element in anchor.find_all_next():
             if not isinstance(element, Tag):
@@ -181,6 +185,8 @@ def find_table_after_label(soup: BeautifulSoup, label: str, stop_labels: tuple[s
             if text and normalize_label(text) in stop_set:
                 break
             if element.name == "table":
+                if normalize_label(infer_table_title(element)) in stop_set:
+                    break
                 return element
     for index, table in enumerate(soup.find_all("table"), start=1):
         title = infer_table_title(table, f"Tabla {index}")

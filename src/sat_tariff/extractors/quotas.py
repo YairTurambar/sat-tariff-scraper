@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .common import ExtractionResult, ascii_upper, find_table_after_label, normalize_label, normalize_text, parse_html, table_to_labeled_dicts
+from .common import ExtractionResult, ascii_upper, cell_text, direct_cells, direct_rows, find_table_after_label, normalize_label, normalize_text, parse_html, table_to_labeled_dicts
 from ..exporters.layouts import QUOTA_EMPTY_MESSAGE, QUOTA_FIELD_HEADERS
 from ..models import QuotaRecord
 
@@ -28,8 +28,23 @@ def parse_quotas(html: str) -> ExtractionResult[QuotaRecord]:
         for row in goods
     ))
     structured: list[QuotaRecord] = []
+    identifying_headers = {
+        ascii_upper(normalize_label(header)) for header in QUOTA_FIELD_HEADERS.values()
+        if header != "País"
+    }
     for table in soup.find_all("table"):
-        for row in table_to_labeled_dicts(table, ("Cuota", "País")):
+        if not any(
+            ascii_upper(normalize_label(cell_text(cell))) in identifying_headers
+            for row in direct_rows(table) for cell in direct_cells(row)
+        ):
+            continue
+        try:
+            quota_rows = table_to_labeled_dicts(table, tuple(QUOTA_FIELD_HEADERS.values()), strict_width=True)
+        except ValueError as exc:
+            return ExtractionResult(rows=[], status="extraction_error", message=str(exc))
+        if not quota_rows:
+            return ExtractionResult(rows=[], status="extraction_error", message="Quota headers not recognized")
+        for row in quota_rows:
             fields = {
                 field: row.get(ascii_upper(normalize_label(header)), "")
                 for field, header in QUOTA_FIELD_HEADERS.items()

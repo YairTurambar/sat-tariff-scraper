@@ -335,7 +335,8 @@ def test_resume_repairs_failed_section_without_overwriting_later_sections(tmp_pa
         storage.close()
 
 
-def test_mismatched_goods_response_is_rejected_before_persistence(tmp_path, monkeypatch):
+@pytest.mark.parametrize("goods_code", ["0210.11.0000", "0101"])
+def test_mismatched_goods_response_is_rejected_before_persistence(tmp_path, monkeypatch, goods_code):
     from sat_tariff.extractors.nomenclature import parse_nomenclature
     from sat_tariff.navigation import SectionNavigationError
 
@@ -343,12 +344,53 @@ def test_mismatched_goods_response_is_rejected_before_persistence(tmp_path, monk
     _stub_parsers(monkeypatch)
     monkeypatch.setitem(navigation_module.SECTION_PARSERS, "nomenclature", parse_nomenclature)
     html = (Path(__file__).resolve().parents[1] / "fixtures" / "nomenclature_caption.html").read_text(encoding="utf-8")
+    html = html.replace("0210.11.0000", goods_code)
     monkeypatch.setattr(NavigationService, "open_section_html", lambda self, section: html)
     try:
         with pytest.raises(SectionNavigationError, match="does not match"):
             service.process_code(entry("0210120000"))
         assert "nomenclature" not in storage.get_processed_sections("0210120000")
         assert storage.get_code("0210120000")["state"] == "retryable_error"
+    finally:
+        storage.close()
+
+
+def test_compatible_goods_prefix_is_accepted(tmp_path, monkeypatch):
+    from sat_tariff.extractors.nomenclature import parse_nomenclature
+
+    service, storage = make_service(tmp_path, FakePage())
+    _stub_parsers(monkeypatch)
+    monkeypatch.setitem(navigation_module.SECTION_PARSERS, "nomenclature", parse_nomenclature)
+    html = (Path(__file__).resolve().parents[1] / "fixtures" / "nomenclature_caption.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(NavigationService, "open_section_html", lambda self, section: html.replace("0210.11.0000", "0210"))
+    try:
+        service.process_code(entry("0210110000"))
+        assert storage.get_code("0210110000")["state"] == "completed"
+        assert storage.load_all_for_export()[0]["nomenclature"]["rows"][0]["code"] == "0210"
+    finally:
+        storage.close()
+
+
+def test_parser_failure_does_not_prevent_next_hs_code(tmp_path, monkeypatch):
+    from sat_tariff.extractors.nomenclature import parse_nomenclature
+    from sat_tariff.navigation import SectionNavigationError
+
+    page = FakePage()
+    service, storage = make_service(tmp_path, page)
+    _stub_parsers(monkeypatch)
+    monkeypatch.setitem(navigation_module.SECTION_PARSERS, "nomenclature", parse_nomenclature)
+    partial = (Path(__file__).resolve().parents[1] / "fixtures" / "nomenclature_partial.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        NavigationService, "open_section_html",
+        lambda self, section: "<div>Unknown response</div>" if page.hs_input.value == "0210110000" else partial,
+    )
+    try:
+        with pytest.raises(SectionNavigationError):
+            service.process_entries([entry("0210110000"), entry("0210120000")])
+        assert storage.get_code("0210110000")["state"] == "retryable_error"
+        assert storage.get_code("0210120000")["state"] == "completed"
+        assert storage.get_processed_sections("0210110000") == {"rights"}
+        assert storage.get_processed_sections("0210120000") == set(navigation_module.SECTION_SEQUENCE)
     finally:
         storage.close()
 
