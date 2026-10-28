@@ -41,6 +41,42 @@ python -m sat_tariff resume-batches
 python -m sat_tariff export
 ```
 
+### Archivos TXT explícitos (sin manifiesto)
+
+Si ya tienes archivos batch independientes, no necesitas crear un archivo maestro ni ejecutar
+`prepare-batches`. Repite `--file` en el orden deseado; no hay límite en la cantidad de archivos:
+
+```powershell
+$env:SAT_SQLITE_DB="sat_tariff_prueba_30.db"
+python -m sat_tariff run-batches `
+  --file .\HS_codes_batch_01.txt `
+  --file .\HS_codes_batch_02.txt `
+  --file .\HS_codes_batch_03.txt
+python -m sat_tariff export
+```
+
+Para reanudar, pasa los mismos archivos a `resume-batches`:
+
+```powershell
+python -m sat_tariff resume-batches `
+  --file .\HS_codes_batch_01.txt `
+  --file .\HS_codes_batch_02.txt `
+  --file .\HS_codes_batch_03.txt
+```
+
+Cada archivo se valida con el límite normal de 500 códigos. Los duplicados dentro o entre archivos
+se omiten globalmente y se reportan. Todos los códigos faltantes se registran en la misma base
+configurada en `SAT_SQLITE_DB`, sin restablecer estados ni secciones guardadas. `resume-batches`
+omite códigos `completed`/`permanent_error`, procesa los demás y conserva los checkpoints por
+sección. `--file` no se puede combinar con `--directory`; esa opción continúa reservada al flujo
+basado en manifiesto.
+
+El programa abre una sola sesión de navegador, contexto y página, y navega al portal una sola vez
+por ejecución; las cookies y el formulario se mantienen al pasar de un archivo al siguiente. Por
+eso, normalmente basta resolver el CAPTCHA inicial para todos los batches. SAT aún puede exigir
+otro CAPTCHA por expiración o por sus propias políticas; esa pausa sigue siendo manual. El Excel
+consolidado se genera al final con `python -m sat_tariff export` y no se exporta automáticamente.
+
 Chrome permanece abierto **únicamente mientras el mismo comando `run-batches`/`resume-batches`
 siga ejecutándose**. Si el proceso termina o el equipo se reinicia, el navegador se cierra y SAT
 puede volver a pedir un CAPTCHA al reanudar. El CAPTCHA siempre se resuelve manualmente en el
@@ -61,7 +97,9 @@ Lee el archivo maestro (`SAT_INPUT_FILE`, por defecto `HS_codes.txt`) y:
 - genera `manifest.json`.
 
 Opciones: `--batch-size N` y `--directory RUTA`. `run-batches` y `resume-batches` aceptan el mismo
-`--directory RUTA` para trabajar con un conjunto de lotes fuera de `SAT_BATCH_DIRECTORY`.
+`--directory RUTA` para trabajar con un conjunto de lotes fuera de `SAT_BATCH_DIRECTORY`, o
+repeticiones de `--file RUTA` para procesar TXT explícitos sin manifiesto; ambas opciones son
+mutuamente excluyentes.
 
 Los archivos de lote obsoletos de una preparación anterior se eliminan **después** de escribir y
 validar el conjunto nuevo, y el manifiesto se publica al final: un fallo nunca deja un manifiesto

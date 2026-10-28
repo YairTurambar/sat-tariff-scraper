@@ -44,14 +44,28 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--directory", default=None, help="Directory for the generated batches")
     run_batches_parser = subparsers.add_parser(
         "run-batches",
-        help="Process every prepared batch in one run, with a single persistent browser session",
+        help="Process prepared batches or explicit TXT files in one persistent browser session",
     )
     run_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
+    run_batches_parser.add_argument(
+        "--file",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Explicit HS code TXT batch; repeat to process files in the given order",
+    )
     resume_batches_parser = subparsers.add_parser(
         "resume-batches",
-        help="Resume every prepared batch from SQLite state, with a single persistent browser session",
+        help="Resume prepared batches or explicit TXT files in one persistent browser session",
     )
     resume_batches_parser.add_argument("--directory", default=None, help="Directory holding the prepared batches")
+    resume_batches_parser.add_argument(
+        "--file",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Explicit HS code TXT batch; repeat to process files in the given order",
+    )
     return parser
 
 
@@ -280,25 +294,65 @@ def cmd_prepare_batches(config, *, batch_size: int | None = None, directory: str
     return 0
 
 
-def _run_batches_command(config, *, resume: bool = False, directory: str | None = None) -> int:
+def _run_batches_command(
+    config,
+    *,
+    resume: bool = False,
+    directory: str | None = None,
+    files: list[str] | None = None,
+) -> int:
     from .batches import (
         BatchError,
+        BatchInfo,
         build_batch_plans,
         load_batch_entries,
         load_manifest,
         verify_manifest,
     )
 
+    if directory is not None and files:
+        print(
+            "--directory no se puede combinar con --file; usa uno de los dos modos.",
+            file=sys.stderr,
+        )
+        return 1
+
     batch_directory = Path(directory) if directory else config.batch_directory
+    manifest = None
     try:
-        manifest = load_manifest(batch_directory)
-        verify_manifest(manifest)
-        # The policy recorded in the manifest is authoritative: changing
-        # SAT_INVALID_LINE_POLICY afterwards must not silently change which
-        # codes belong to the prepared set.
-        loaded = load_batch_entries(manifest)
-    except (BatchError, InputValidationError, OSError) as exc:
-        print(f"Batch manifest error: {exc}", file=sys.stderr)
+        if files:
+            loaded = []
+            seen = set()
+            explicit_duplicates = []
+            suspicious_codes = []
+            for number, filename in enumerate(files, start=1):
+                path = Path(filename)
+                result = validate_hs_code_file(path, invalid_policy=config.invalid_line_policy)
+                if not result.entries:
+                    raise BatchError(f"El archivo '{path}' no contiene códigos procesables.")
+                suspicious_codes.extend(result.suspicious_codes)
+                explicit_duplicates.extend(result.duplicate_codes)
+                for entry in result.entries:
+                    if entry.normalized_code in seen:
+                        explicit_duplicates.append(entry.normalized_code)
+                    else:
+                        seen.add(entry.normalized_code)
+                loaded.append(
+                    (
+                        BatchInfo(number=number, path=str(path), count=result.total_lines, sha256=""),
+                        result.entries,
+                    )
+                )
+        else:
+            manifest = load_manifest(batch_directory)
+            verify_manifest(manifest)
+            # The policy recorded in the manifest is authoritative: changing
+            # SAT_INVALID_LINE_POLICY afterwards must not silently change which
+            # codes belong to the prepared set.
+            loaded = load_batch_entries(manifest)
+    except (BatchError, InputValidationError, OSError, UnicodeError) as exc:
+        error_kind = "Explicit batch file error" if files else "Batch manifest error"
+        print(f"{error_kind}: {exc}", file=sys.stderr)
         return 1
 
     storage = Storage(config.sqlite_db)
@@ -325,9 +379,19 @@ def _run_batches_command(config, *, resume: bool = False, directory: str | None 
         plans = build_batch_plans(loaded, pending_codes)
         total_pending = sum(len(plan.entries) for plan in plans)
 
-        print(f"Lotes en el manifiesto: {len(manifest.batches)}")
+        if manifest:
+            print(f"Lotes en el manifiesto: {len(manifest.batches)}")
+        else:
+            print(f"Archivos explícitos: {len(files)}")
         print(f"Total de códigos: {len(all_entries)}")
         print(f"Completados previamente: {already_completed}")
+        if files and explicit_duplicates:
+            print(
+                f"Duplicados omitidos: {len(explicit_duplicates)} "
+                f"({', '.join(explicit_duplicates)})"
+            )
+        if files and suspicious_codes:
+            print(f"Códigos sospechosos ({config.invalid_line_policy} policy): {', '.join(suspicious_codes)}")
         if not plans:
             print("Processed 0 HS codes.")
             print("No quedan códigos pendientes; el navegador no se abrió.")
@@ -351,7 +415,7 @@ def _run_batches_command(config, *, resume: bool = False, directory: str | None 
             print(f"Processed {processed_now} HS codes.")
             print(f"Lotes recorridos: {len(plans)}")
             print(f"Fallidos/pendientes: {remaining}")
-            if manifest.duplicates_skipped:
+            if manifest and manifest.duplicates_skipped:
                 print(f"Duplicados omitidos al preparar: {len(manifest.duplicates_skipped)}")
             print("Consolida el Excel con 'python -m sat_tariff export'.")
         return 0
@@ -389,9 +453,16 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=getattr(args, "batch_size", None),
             directory=getattr(args, "directory", None),
         ),
-        "run-batches": lambda: _run_batches_command(config, directory=getattr(args, "directory", None)),
+        "run-batches": lambda: _run_batches_command(
+            config,
+            directory=getattr(args, "directory", None),
+            files=getattr(args, "file", None),
+        ),
         "resume-batches": lambda: _run_batches_command(
-            config, resume=True, directory=getattr(args, "directory", None)
+            config,
+            resume=True,
+            directory=getattr(args, "directory", None),
+            files=getattr(args, "file", None),
         ),
     }
     return commands[args.command]()
