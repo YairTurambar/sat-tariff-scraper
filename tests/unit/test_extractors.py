@@ -66,6 +66,35 @@ def test_sat_ca108_all_ten_vigencies_remain_in_source_order():
     assert all(row.country == row.exhaustion_date == row.variation == row.extensions == "" for row in result.rows)
 
 
+def test_sat_headerless_inciso_populates_general_treatment():
+    html = read_fixture("quota_goods_sat.html") + read_fixture("quotas_sat_ca108.html")
+    result = parse_quotas(html)
+    assert result.status == "ok"
+    assert len(result.rows) == 10
+    expected = "0210.11.0000 | - - Jamones, paletas y sus trozos, sin deshuesar"
+    assert all(row.general_treatment == expected for row in result.rows)
+
+
+def test_sat_subpartidas_are_not_exported_as_the_queried_inciso():
+    from sat_tariff.extractors.common import parse_html
+
+    goods = parse_html(read_fixture("quota_goods_sat.html"))
+    goods.select_one('table[id$=":incisosTable"]').decompose()
+    result = parse_quotas(str(goods) + read_fixture("quotas_sat_ca108.html"))
+    assert result.status == "ok"
+    assert len(result.rows) == 10
+    assert all(row.general_treatment == "" for row in result.rows)
+
+
+def test_sat_headerless_fallback_does_not_replace_valid_labeled_goods():
+    html = read_fixture("quotas_structured.html") + read_fixture("quota_goods_sat.html").replace(
+        "0210.11.0000", "0210.12.0000",
+    )
+    result = parse_quotas(html)
+    assert result.status == "ok"
+    assert all(row.general_treatment.startswith("0210.11.0000 | ") for row in result.rows)
+
+
 @pytest.mark.parametrize("row_index", [0, 5, 9])
 def test_quota_popup_is_extracted_only_from_its_own_row(row_index):
     from sat_tariff.extractors.common import parse_html

@@ -47,6 +47,13 @@ def parse_quotas(html: str) -> ExtractionResult[QuotaRecord]:
 
     goods_table = find_table_after_label(soup, "Código de Mercancías", ("Cuotas", "TRATAMIENTO GENERAL"))
     goods = table_to_labeled_dicts(goods_table, ("Código", "Descripción")) if goods_table is not None else []
+    if not goods:
+        for table in soup.select('table[id$=":incisosTable"]'):
+            for row in table.select("tr.filaInciso"):
+                code = row.select_one('span[id$=":inciso"].columnaCodigoSubpartida')
+                description = row.select_one("span.columnaNombreSubpartida")
+                if code is not None and description is not None and cell_text(code):
+                    goods.append({"CODIGO": cell_text(code), "DESCRIPCION": cell_text(description)})
     treatment = "\n".join(dict.fromkeys(
         " | ".join(value for value in (row.get("CODIGO", ""), row.get("DESCRIPCION", "")) if value)
         for row in goods

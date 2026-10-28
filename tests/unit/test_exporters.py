@@ -14,7 +14,8 @@ from sat_tariff.exporters.styles import DATA_LINE_HEIGHT
 from sat_tariff.storage import Storage
 
 
-def test_sat_quota_popup_round_trips_without_duplicate_or_shared_extensions(tmp_path):
+@pytest.mark.parametrize("all_popups", [False, True])
+def test_sat_quota_popup_round_trips_without_duplicate_or_shared_extensions(tmp_path, all_popups):
     from sat_tariff.extractors.common import parse_html
     from sat_tariff.extractors.quotas import parse_quotas
     from sat_tariff.models import ProcessingState
@@ -23,8 +24,11 @@ def test_sat_quota_popup_round_trips_without_duplicate_or_shared_extensions(tmp_
     fixtures = Path(__file__).resolve().parents[1] / "fixtures"
     soup = parse_html((fixtures / "quotas_sat_ca108.html").read_text(encoding="utf-8"))
     popup = (fixtures / "quota_extensions_popup.html").read_text(encoding="utf-8")
-    soup.select("tbody > tr")[5].find_all("td", recursive=False)[-1].append(parse_html(popup))
-    result = parse_quotas(str(soup))
+    for index, row in enumerate(soup.select("tbody > tr")):
+        if all_popups or index == 5:
+            row.find_all("td", recursive=False)[-1].append(parse_html(popup.replace(":5:", f":{index}:").replace("_3A5_3A", f"_3A{index}_3A")))
+    goods = (fixtures / "quota_goods_sat.html").read_text(encoding="utf-8")
+    result = parse_quotas(goods + str(soup))
     assert result.status == "ok"
     storage = Storage(tmp_path / "source.sqlite3")
     try:
@@ -59,8 +63,12 @@ def test_sat_quota_popup_round_trips_without_duplicate_or_shared_extensions(tmp_
         assert sheet["L2"].value is None
         expected = "Ampliaciones de la cuota en la vigencia definida\nNo tiene ampliaciones definidas"
         assert [sheet.cell(row, 12).value for row in range(3, 13)] == [
-            expected if index == 5 else None for index in range(10)
+            expected if all_popups or index == 5 else None for index in range(10)
         ]
+        assert all(
+            sheet.cell(row, 4).value == "0210.11.0000 | - - Jamones, paletas y sus trozos, sin deshuesar"
+            for row in range(3, 13)
+        )
         assert [sheet.cell(row, 7).value for row in range(3, 13)] == [
             record.effective_from for record in result.rows
         ]
