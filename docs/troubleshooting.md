@@ -161,10 +161,26 @@ command ended, the terminal was closed or the machine rebooted, the browser was 
 may show a new CAPTCHA. Checkpoints are preserved; run `python -m sat_tariff resume-batches`, solve
 the CAPTCHA once in the browser and the remaining batches continue in the same session.
 
+For independent TXT files, pass each one to the same resume command instead of creating a manifest:
+
+```powershell
+python -m sat_tariff resume-batches `
+  --file .\HS_codes_batch_01.txt `
+  --file .\HS_codes_batch_02.txt `
+  --file .\HS_codes_batch_03.txt
+```
+
+`run-batches` accepts the same repeated `--file` options. All listed files use the configured
+`SAT_SQLITE_DB`; completed codes and section checkpoints are preserved. A single browser session
+normally lets the initial manual CAPTCHA cover all files, but SAT can demand another one due to
+expiration or its own policy. Create the consolidated Excel after processing with
+`python -m sat_tariff export`.
+
 ## `run-batches` reports `Processed 0 HS codes.`
 
-Every manifest code is already `completed` (or `permanent_error`) in SQLite, so the browser is not
-opened. Build the workbook with `python -m sat_tariff export`.
+Every code in the active manifest or supplied `--file` list is already `completed` (or
+`permanent_error`) in SQLite, so the browser is not opened. Build the workbook with
+`python -m sat_tariff export`.
 
 ## Visual comparison is skipped
 

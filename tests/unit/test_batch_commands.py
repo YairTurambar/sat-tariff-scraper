@@ -96,6 +96,19 @@ def prepare_cli_env(monkeypatch, config: AppConfig) -> None:
     monkeypatch.setenv("SAT_MAX_RETRIES", "0")
 
 
+def write_explicit_files(tmp_path: Path, code_groups: list[list[str]]) -> list[Path]:
+    files = []
+    for index, codes in enumerate(code_groups, start=1):
+        path = tmp_path / f"HS_codes_batch_{index:02d}.txt"
+        path.write_text("".join(f"{code}\n" for code in codes), encoding="utf-8")
+        files.append(path)
+    return files
+
+
+def explicit_args(command: str, paths: list[Path]) -> list[str]:
+    return [command, *[argument for path in paths for argument in ("--file", str(path))]]
+
+
 # 14-17. one session, one service, one page.goto() ------------------------
 def test_run_batches_uses_a_single_browser_session(tmp_path, monkeypatch, capsys, fake_env):
     page, recorder, services = fake_env
@@ -159,7 +172,10 @@ def test_captcha_solved_once_covers_every_batch(tmp_path, monkeypatch, fake_env)
 
     monkeypatch.setattr(navigation_module, "wait_for_manual_captcha_resolution", fake_wait)
 
-    assert cli.main(["run-batches"]) == 0
+    files = write_explicit_files(
+        tmp_path, [[f"{index:010d}"] for index in range(4)]
+    )
+    assert cli.main(explicit_args("run-batches", files)) == 0
     assert waits["count"] == 1
     assert recorder.enter_count == 1
     assert len([event for event in page.events if event[0] == "goto"]) == 1
@@ -190,7 +206,10 @@ def test_captcha_reappearing_in_a_later_batch_pauses_without_restarting(tmp_path
 
     page.on_search_click = on_search_click
 
-    assert cli.main(["run-batches"]) == 0
+    files = write_explicit_files(
+        tmp_path, [[f"{index:010d}"] for index in range(4)]
+    )
+    assert cli.main(explicit_args("run-batches", files)) == 0
     assert waits["count"] >= 1
     assert recorder.enter_count == 1
     assert recorder.exit_count == 1
@@ -378,3 +397,165 @@ def test_run_navigation_batches_reuses_one_service(tmp_path, monkeypatch, fake_e
     assert recorder.enter_count == 1
     assert recorder.exit_count == 1
     assert len([event for event in page.events if event[0] == "goto"]) == 1
+
+
+def test_explicit_files_process_in_order_with_one_database_and_session(
+    tmp_path, monkeypatch, capsys, fake_env
+):
+    page, recorder, services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    groups = [
+        [f"{index:010d}" for index in range(start, start + 10)]
+        for start in (0, 10, 20)
+    ]
+    files = write_explicit_files(tmp_path, groups)
+
+    assert cli.main(explicit_args("run-batches", files)) == 0
+
+    processed = [
+        message.split("HS ")[1]
+        for kind, message in page.events
+        if kind == "say" and "HS " in message
+    ]
+    expected = [f"{index:010d}" for index in range(30)]
+    assert processed == expected
+    assert recorder.enter_count == recorder.exit_count == 1
+    assert len(services) == 1
+    assert len([event for event in page.events if event[0] == "goto"]) == 1
+    assert "Archivos explícitos: 3" in capsys.readouterr().out
+
+    storage = Storage(config.sqlite_db)
+    try:
+        states = storage.get_states(expected)
+        assert len(states) == 30
+        assert set(states.values()) == {ProcessingState.completed.value}
+    finally:
+        storage.close()
+
+
+def test_explicit_files_accept_arbitrary_file_count(tmp_path, monkeypatch, fake_env):
+    page, recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    files = write_explicit_files(
+        tmp_path, [[f"{index:010d}"] for index in range(7)]
+    )
+
+    assert cli.main(explicit_args("run-batches", files)) == 0
+
+    assert recorder.enter_count == recorder.exit_count == 1
+    processed = [message for kind, message in page.events if kind == "say" and "HS " in message]
+    assert len(processed) == 7
+
+
+def test_explicit_files_deduplicate_globally_and_report_codes(
+    tmp_path, monkeypatch, capsys, fake_env
+):
+    page, _recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    files = write_explicit_files(
+        tmp_path,
+        [["0000000001", "0000000002", "0000000001"], ["0000000002", "0000000003"]],
+    )
+
+    assert cli.main(explicit_args("run-batches", files)) == 0
+
+    processed = [message.split("HS ")[1] for kind, message in page.events if kind == "say" and "HS " in message]
+    assert processed == ["0000000001", "0000000002", "0000000003"]
+    assert "Duplicados omitidos: 2 (0000000001, 0000000002)" in capsys.readouterr().out
+
+
+def test_resume_explicit_files_skips_completed_and_preserves_checkpoints(
+    tmp_path, monkeypatch, fake_env
+):
+    page, recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    files = write_explicit_files(
+        tmp_path, [["0000000001", "0000000002", "0000000003", "0000000004"]]
+    )
+    storage = Storage(config.sqlite_db)
+    try:
+        storage.upsert_code("0000000001", "0000000001", ProcessingState.completed)
+        storage.save_section_rows("0000000001", "rights", [{"agreement_name": "Saved"}], section_status="ok")
+        storage.upsert_code("0000000002", "0000000002", ProcessingState.rights_completed)
+        storage.save_section_rows("0000000002", "rights", [{"agreement_name": "Checkpoint"}], section_status="ok")
+        storage.upsert_code("0000000004", "0000000004", ProcessingState.permanent_error)
+    finally:
+        storage.close()
+
+    assert cli.main(explicit_args("resume-batches", files)) == 0
+
+    processed = [message.split("HS ")[1] for kind, message in page.events if kind == "say" and "HS " in message]
+    assert processed == ["0000000002", "0000000003"]
+    assert recorder.enter_count == recorder.exit_count == 1
+    storage = Storage(config.sqlite_db)
+    try:
+        assert storage.get_code("0000000001")["state"] == ProcessingState.completed.value
+        assert storage.get_code("0000000004")["state"] == ProcessingState.permanent_error.value
+        assert storage.get_section_rows_by_code("rights")["0000000002"] == [
+            {"agreement_name": "Checkpoint"}
+        ]
+    finally:
+        storage.close()
+
+
+@pytest.mark.parametrize(
+    ("contents", "missing", "error"),
+    [
+        (None, True, "input.txt"),
+        ("bad\n", False, "procesables"),
+        (" \n\n", False, "at least 1 non-empty line"),
+        ("".join(f"{index:010d}\n" for index in range(501)), False, "maximum of 500"),
+    ],
+    ids=["missing", "invalid", "empty", "over-limit"],
+)
+def test_invalid_explicit_files_fail_before_browser(
+    tmp_path, monkeypatch, capsys, fake_env, contents, missing, error
+):
+    _page, recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    path = tmp_path / "input.txt"
+    if not missing:
+        path.write_text(contents, encoding="utf-8")
+
+    assert cli.main(explicit_args("run-batches", [path])) == 1
+    assert error in capsys.readouterr().err
+    assert recorder.enter_count == 0
+
+
+def test_explicit_file_invalid_encoding_fails_before_browser(tmp_path, monkeypatch, capsys, fake_env):
+    _page, recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    path = tmp_path / "invalid.txt"
+    path.write_bytes(b"\xff")
+
+    assert cli.main(explicit_args("run-batches", [path])) == 1
+    assert "Explicit batch file error" in capsys.readouterr().err
+    assert recorder.enter_count == 0
+
+
+def test_explicit_file_cannot_be_combined_with_directory(tmp_path, monkeypatch, capsys, fake_env):
+    _page, recorder, _services = fake_env
+    config = make_config(tmp_path)
+    prepare_cli_env(monkeypatch, config)
+    path = write_explicit_files(tmp_path, [["0000000001"]])[0]
+
+    assert cli.main(["run-batches", "--directory", str(tmp_path), "--file", str(path)]) == 1
+    assert "--directory no se puede combinar con --file" in capsys.readouterr().err
+    assert recorder.enter_count == 0
+
+
+def test_file_option_is_repeatable_and_visible_in_help(capsys):
+    args = cli.build_parser().parse_args(
+        ["run-batches", "--file", "first.txt", "--file", "second.txt"]
+    )
+    assert args.file == ["first.txt", "second.txt"]
+    with pytest.raises(SystemExit) as exc_info:
+        cli.build_parser().parse_args(["resume-batches", "--help"])
+    assert exc_info.value.code == 0
+    assert "--file PATH" in capsys.readouterr().out

@@ -155,6 +155,9 @@ python -m sat_tariff resume-batches
   Accepts `--directory` to point at a batch set outside `SAT_BATCH_DIRECTORY`
 - `resume-batches`: same as `run-batches` but driven by the manifest plus SQLite state, so it resumes
   across batch boundaries without changing `SAT_INPUT_FILE`. Also accepts `--directory`
+- Both batch commands accept repeated `--file PATH` options for existing TXT batches without a
+  master file or manifest. The supplied files are validated and processed in order with the same
+  SQLite database and browser session; do not combine `--file` with `--directory`.
 
 ## Batch processing for more than 500 HS codes
 
@@ -174,6 +177,25 @@ Recovery after an interruption:
 python -m sat_tariff resume-batches
 python -m sat_tariff export
 ```
+
+For TXT batch files already prepared independently, pass each file explicitly (repeat `--file` for
+any number of files). This PowerShell example uses one configured database for all files:
+
+```powershell
+$env:SAT_SQLITE_DB="sat_tariff_prueba_30.db"
+python -m sat_tariff run-batches `
+  --file .\HS_codes_batch_01.txt `
+  --file .\HS_codes_batch_02.txt `
+  --file .\HS_codes_batch_03.txt
+python -m sat_tariff export
+```
+
+To resume those same files, use `resume-batches` with the same repeated `--file` options. Completed
+and permanently failed codes are skipped; missing or unfinished codes resume from their persisted
+section checkpoints. The application opens one browser session for the command, so resolving the
+initial CAPTCHA normally covers all files. SAT may still request another CAPTCHA because of its
+own expiration or policies. Export one consolidated workbook afterward with
+`python -m sat_tariff export`.
 
 - Chrome is opened **once** and closed once; it is never restarted between batches, so cookies, the
   persistent profile, the validated `frmBuscar` form and the solved CAPTCHA survive batch boundaries.
