@@ -14,6 +14,66 @@ from sat_tariff.exporters.styles import DATA_LINE_HEIGHT
 from sat_tariff.storage import Storage
 
 
+def test_sat_quota_popup_round_trips_without_duplicate_or_shared_extensions(tmp_path):
+    from sat_tariff.extractors.common import parse_html
+    from sat_tariff.extractors.quotas import parse_quotas
+    from sat_tariff.models import ProcessingState
+    from sat_tariff.validation.output_validator import validate_workbook_structure
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures"
+    soup = parse_html((fixtures / "quotas_sat_ca108.html").read_text(encoding="utf-8"))
+    popup = (fixtures / "quota_extensions_popup.html").read_text(encoding="utf-8")
+    soup.select("tbody > tr")[5].find_all("td", recursive=False)[-1].append(parse_html(popup))
+    result = parse_quotas(str(soup))
+    assert result.status == "ok"
+    storage = Storage(tmp_path / "source.sqlite3")
+    try:
+        storage.upsert_code("0210110000", "0210110000", ProcessingState.completed)
+        for _ in range(2):
+            storage.save_section_rows("0210110000", "quotas", result.rows, section_status="ok")
+        # Older JSON has no extensions field, including the no-quota case.
+        storage.upsert_code("0101210000", "0101210000", ProcessingState.completed)
+        storage.save_section_rows("0101210000", "quotas", [{
+            "treatment_name": "TRATAMIENTO GENERAL",
+            "message": "No se han encontrado cuotas/contingentes para el inciso consultado",
+            "source_status": "no_quotas",
+        }], section_status="no_quotas")
+    finally:
+        storage.close()
+    storage = Storage(tmp_path / "source.sqlite3")
+    try:
+        bundles = storage.load_all_for_export()
+        assert storage.get_processed_sections("0210110000") == {"quotas"}
+        assert len(bundles[1]["quotas"]["rows"]) == 10
+    finally:
+        storage.close()
+    path = export_workbook(bundles, AppConfig(output_xlsx=tmp_path / "export.xlsx", backup_output=False))
+    validate_workbook_structure(path)
+    workbook = load_workbook(path)
+    try:
+        sheet = workbook["Cuotas"]
+        assert sheet.max_row == 12
+        assert sheet.max_column == 12
+        assert sheet["L1"].value == "Ampliaciones de la cuota"
+        assert sheet["D2"].value == "No se han encontrado cuotas/contingentes para el inciso consultado"
+        assert sheet["L2"].value is None
+        expected = "Ampliaciones de la cuota en la vigencia definida\nNo tiene ampliaciones definidas"
+        assert [sheet.cell(row, 12).value for row in range(3, 13)] == [
+            expected if index == 5 else None for index in range(10)
+        ]
+        assert [sheet.cell(row, 7).value for row in range(3, 13)] == [
+            record.effective_from for record in result.rows
+        ]
+        assert [sheet.cell(row, 9).value for row in range(3, 13)] == [
+            record.initial_quantity for record in result.rows
+        ]
+        assert all(sheet.cell(row, column).value is None for row in range(3, 13) for column in (6, 10, 11))
+        assert sheet["L8"].alignment.wrap_text
+        assert sheet.auto_filter.ref == "A1:L12"
+    finally:
+        workbook.close()
+
+
 def test_corrected_sections_round_trip_sqlite_to_excel(tmp_path):
     from sat_tariff.extractors.nomenclature import parse_nomenclature
     from sat_tariff.extractors.quotas import parse_quotas
@@ -45,17 +105,17 @@ def test_corrected_sections_round_trip_sqlite_to_excel(tmp_path):
     quotas = workbook["Cuotas"]
     assert [cell.value for cell in quotas[1]] == [
         "HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL", "Cuota", "País",
-        "Inicio vigencia", "Fin vigencia", "Cantidad Inicial Permitida", "Fecha Agotamiento", "% Variación",
+        "Inicio vigencia", "Fin vigencia", "Cantidad Inicial Permitida", "Fecha Agotamiento", "% Variación", "Ampliaciones de la cuota",
     ]
     assert quotas.max_row == 4
     assert quotas["D2"].value == "Cupo anual | 100 toneladas"
-    assert all(quotas.cell(2, column).value is None for column in range(5, 12))
+    assert all(quotas.cell(2, column).value is None for column in range(5, 13))
     assert [cell.value for cell in quotas[3]][4:] == [
-        "Cuota 1", "Guatemala", "01/01/2024", "31/12/2024", "100", "30/11/2024", "5%",
+        "Cuota 1", "Guatemala", "01/01/2024", "31/12/2024", "100", "30/11/2024", "5%", None,
     ]
-    assert [cell.value for cell in quotas[4]][4:] == ["Cuota 2", None, "01/01/2025", None, "200", None, "0%"]
+    assert [cell.value for cell in quotas[4]][4:] == ["Cuota 2", None, "01/01/2025", None, "200", None, "0%", None]
     assert quotas["D3"].value == quotas["D4"].value
-    assert quotas.auto_filter.ref == "A1:K4"
+    assert quotas.auto_filter.ref == "A1:L4"
     restrictions = workbook["Restricciones"]
     assert [cell.value for cell in restrictions[1]] == [
         "HS_Code", "Status", "Overall_Status", "Código", "Descripción", "Código adicional", "Valor", "Código de cuota",
@@ -83,7 +143,7 @@ def test_corrected_sections_round_trip_sqlite_to_excel(tmp_path):
     assert restrictions.auto_filter.ref == "A1:H3"
     assert nomenclature.auto_filter.ref == "A2:J5"
     validate_workbook_structure(path)
-    quotas.delete_cols(11)
+    quotas.delete_cols(12)
     workbook.save(tmp_path / "invalid.xlsx")
     workbook.close()
     with pytest.raises(OutputValidationError, match="Cuotas"):

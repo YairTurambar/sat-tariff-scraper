@@ -88,6 +88,7 @@ class QuotaRecord:
     initial_quantity: str = ""
     exhaustion_date: str = ""
     variation: str = ""
+    extensions: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

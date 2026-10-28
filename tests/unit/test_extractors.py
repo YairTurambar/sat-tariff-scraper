@@ -43,10 +43,55 @@ def test_structured_quotas_preserve_header_mapping_and_empty_cells():
         "Cuota 1", "Guatemala", "01/01/2024", "31/12/2024", "100", "30/11/2024", "5%",
     )
     assert second.general_treatment == first.general_treatment
+    assert first.extensions == second.extensions == ""
     assert (second.quota, second.country, second.effective_from, second.effective_to,
             second.initial_quantity, second.exhaustion_date, second.variation) == (
         "Cuota 2", "", "01/01/2025", "", "200", "", "0%",
     )
+
+
+def test_sat_ca108_all_ten_vigencies_remain_in_source_order():
+    result = parse_quotas(read_fixture("quotas_sat_ca108.html"))
+    assert result.status == "ok"
+    assert len(result.rows) == 10
+    assert [row.effective_from for row in result.rows] == [
+        "1/1/2023", "1/12/2013", "1/1/2018", "1/1/2016", "1/1/2026",
+        "1/1/2019", "1/1/2014", "1/1/2022", "1/1/2017", "1/1/2024",
+    ]
+    assert [row.initial_quantity for row in result.rows] == [
+        "1350000 KGS", "900000 KGS", "1125000 KGS", "1035000 KGS", "1485000 KGS",
+        "1125000 KGS", "945000 KGS", "1305000 KGS", "1080000 KGS", "1395000 KGS",
+    ]
+    assert all(row.quota == "CA108" for row in result.rows)
+    assert all(row.country == row.exhaustion_date == row.variation == row.extensions == "" for row in result.rows)
+
+
+@pytest.mark.parametrize("row_index", [0, 5, 9])
+def test_quota_popup_is_extracted_only_from_its_own_row(row_index):
+    from sat_tariff.extractors.common import parse_html
+
+    soup = parse_html(read_fixture("quotas_sat_ca108.html"))
+    cell = soup.select("tbody > tr")[row_index].find_all("td", recursive=False)[-1]
+    cell.append(parse_html(read_fixture("quota_extensions_popup.html")))
+    result = parse_quotas(str(soup))
+    assert result.status == "ok"
+    assert len(result.rows) == 10
+    expected = "Ampliaciones de la cuota en la vigencia definida\nNo tiene ampliaciones definidas"
+    assert [row.extensions for row in result.rows] == [
+        expected if index == row_index else "" for index in range(10)
+    ]
+    assert all(row.quota == "CA108" for row in result.rows)
+    assert all("Ver ampliaciones" not in row.extensions for row in result.rows)
+
+
+def test_unrecognized_nested_quota_table_does_not_drop_the_parent_row():
+    html = read_fixture("quotas_sat_ca108.html").replace(
+        "<td></td></tr>", "<td><table><tr><td>Unknown popup</td></tr></table></td></tr>", 1,
+    )
+    result = parse_quotas(html)
+    assert result.status == "extraction_error"
+    assert result.rows == []
+    assert result.message == "Unrecognized nested quota table"
 
 
 def test_quotas_match_reordered_headers_and_ignore_layout_tables():

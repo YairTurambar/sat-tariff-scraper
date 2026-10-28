@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Generic, TypeVar
+from typing import Callable, Generic, TypeVar
 import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -90,6 +90,7 @@ def table_to_dicts(table: Tag) -> list[dict[str, str]]:
 
 def table_to_labeled_dicts(
     table: Tag, required_headers: tuple[str, ...], *, strict_width: bool = False,
+    data_cell_text: Callable[[Tag], str] | None = None,
 ) -> list[dict[str, str]]:
     """Read a leaf table by normalized headers, including a preceding title row."""
     required = {ascii_upper(normalize_label(header)) for header in required_headers}
@@ -101,9 +102,9 @@ def table_to_labeled_dicts(
         extracted = []
         for data_row in rows[index + 1:]:
             cells = direct_cells(data_row)
-            if any(cell.find("table") for cell in cells):
+            if data_cell_text is None and any(cell.find("table") for cell in cells):
                 continue
-            values = [cell_text(cell) for cell in cells]
+            values = [(data_cell_text or cell_text)(cell) for cell in cells]
             if any(values):
                 if strict_width and (len(cells) != len(headers) or any(cell.get("colspan", "1") != "1" for cell in cells)):
                     raise ValueError("SAT table row does not match its headers")

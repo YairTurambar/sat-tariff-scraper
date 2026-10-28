@@ -54,6 +54,7 @@ QUOTA_FIELD_HEADERS = {
     "initial_quantity": "Cantidad Inicial Permitida",
     "exhaustion_date": "Fecha Agotamiento",
     "variation": "% Variación",
+    "extensions": "Ampliaciones de la cuota",
 }
 QUOTAS_HEADERS = ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL", *QUOTA_FIELD_HEADERS.values()]
 TEXT_COLUMNS = {"HS_Code", "Código", "Código adicional", "Código de cuota"}

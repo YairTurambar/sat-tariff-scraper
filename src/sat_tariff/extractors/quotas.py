@@ -2,11 +2,35 @@
 
 from __future__ import annotations
 
+from bs4 import Tag
+
 from .common import ExtractionResult, ascii_upper, cell_text, direct_cells, direct_rows, find_table_after_label, normalize_label, normalize_text, parse_html, table_to_labeled_dicts
 from ..exporters.layouts import QUOTA_EMPTY_MESSAGE, QUOTA_FIELD_HEADERS
 from ..models import QuotaRecord
 
 NO_QUOTA_MESSAGE = QUOTA_EMPTY_MESSAGE
+EXTENSIONS_TITLE = "Ampliaciones de la cuota en la vigencia definida"
+REQUIRED_QUOTA_HEADERS = tuple(
+    header for field, header in QUOTA_FIELD_HEADERS.items() if field != "extensions"
+)
+
+
+def _quota_cell_text(cell: Tag) -> str:
+    popup = cell.find("div", class_="tituloPopPup")
+    if popup is not None and any(
+        normalize_label(label.get_text(" ", strip=True)) == normalize_label(EXTENSIONS_TITLE)
+        for label in popup.find_all("label")
+    ):
+        table = popup.find("table")
+        if table is not None:
+            return "\n".join(
+                " | ".join(cell_text(item) for item in direct_cells(row))
+                for row in direct_rows(table)
+                if any(cell_text(item) for item in direct_cells(row))
+            )
+    if cell.find("table") is not None:
+        raise ValueError("Unrecognized nested quota table")
+    return cell_text(cell)
 
 
 
@@ -29,7 +53,7 @@ def parse_quotas(html: str) -> ExtractionResult[QuotaRecord]:
     ))
     structured: list[QuotaRecord] = []
     identifying_headers = {
-        ascii_upper(normalize_label(header)) for header in QUOTA_FIELD_HEADERS.values()
+        ascii_upper(normalize_label(header)) for header in REQUIRED_QUOTA_HEADERS
         if header != "País"
     }
     for table in soup.find_all("table"):
@@ -39,7 +63,9 @@ def parse_quotas(html: str) -> ExtractionResult[QuotaRecord]:
         ):
             continue
         try:
-            quota_rows = table_to_labeled_dicts(table, tuple(QUOTA_FIELD_HEADERS.values()), strict_width=True)
+            quota_rows = table_to_labeled_dicts(
+                table, REQUIRED_QUOTA_HEADERS, strict_width=True, data_cell_text=_quota_cell_text,
+            )
         except ValueError as exc:
             return ExtractionResult(rows=[], status="extraction_error", message=str(exc))
         if not quota_rows:
@@ -49,6 +75,8 @@ def parse_quotas(html: str) -> ExtractionResult[QuotaRecord]:
                 field: row.get(ascii_upper(normalize_label(header)), "")
                 for field, header in QUOTA_FIELD_HEADERS.items()
             }
+            if not fields["extensions"] and row.get("", "").startswith(EXTENSIONS_TITLE):
+                fields["extensions"] = row[""]
             structured.append(QuotaRecord(
                 treatment_name="TRATAMIENTO GENERAL", message="", source_status="ok",
                 general_treatment=treatment, **fields,
