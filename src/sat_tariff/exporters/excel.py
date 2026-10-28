@@ -23,7 +23,7 @@ from ..extractors.rights_taxes import (
     is_positional_identity,
 )
 from ..validation.output_validator import validate_workbook_structure
-from .layouts import FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
+from .layouts import FORBIDDEN_EXPORT_COLUMNS, NOMENCLATURE_HEADERS, QUOTA_FIELD_HEADERS, QUOTAS_HEADERS, RESTRICTIONS_HEADERS, RIGHTS_BASE_HEADERS, RIGHTS_TRAILING_HEADERS, SHEET_ORDER, TEXT_COLUMNS
 from .styles import autosize_columns, set_data_row_heights, style_data_cells, style_headers
 
 LOGGER = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ def _build_nomenclature_rows(bundles: list[dict[str, Any]]) -> list[dict[str, An
         base = _base_row(bundle, "nomenclature")
         section_rows = bundle.get("nomenclature", {}).get("rows", [])
         scalars = {"Sección": "", "Capítulo:": "", "Fecha inicio de vigencia:": "", "Fecha fin de vigencia:": "", "Códigos adicionales": ""}
-        units: list[tuple[str, str]] = []
+        details: list[tuple[str, str]] = []
         for record in section_rows:
             scalars["Sección"] = scalars["Sección"] or record.get("section", "")
             scalars["Capítulo:"] = scalars["Capítulo:"] or record.get("chapter", "")
@@ -207,12 +207,18 @@ def _build_nomenclature_rows(bundles: list[dict[str, Any]]) -> list[dict[str, An
             scalars["Fecha fin de vigencia:"] = scalars["Fecha fin de vigencia:"] or record.get("effective_to_raw", "")
             scalars["Códigos adicionales"] = scalars["Códigos adicionales"] or record.get("additional_codes_text", "")
             if record.get("record_type") == "unit":
-                units.append((record.get("unit_code", ""), record.get("unit_description", "")))
+                detail = (record.get("unit_code", ""), record.get("unit_description", ""))
+            else:
+                detail = (record.get("code", ""), record.get("description", "") or record.get("content", ""))
+            if any(detail) and detail not in details:
+                details.append(detail)
+        if (details or any(scalars.values())) and base["Status"] in {"empty", "absent", "sin_informacion"}:
+            base["Status"] = "ok"
         shared = {**base, **scalars}
-        if not units:
+        if not details:
             rows.append({**shared, "Código": "", "Descripción": ""})
         else:
-            for code, description in units:
+            for code, description in details:
                 rows.append({**shared, "Código": code, "Descripción": description})
     return rows
 
@@ -249,8 +255,14 @@ def _build_quotas_rows(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for bundle in bundles:
         base = _base_row(bundle, "quotas")
-        messages = [record.get("message", "") for record in bundle.get("quotas", {}).get("rows", []) if record.get("message")]
-        rows.append({**base, "TRATAMIENTO GENERAL": "\n".join(messages)})
+        records = bundle.get("quotas", {}).get("rows", [])
+        treatment = next((record["general_treatment"] for record in records if record.get("general_treatment")), "")
+        for record in records or [{}]:
+            rows.append({
+                **base,
+                "TRATAMIENTO GENERAL": record.get("general_treatment") or treatment or record.get("message") or "",
+                **{header: record.get(field) or "" for field, header in QUOTA_FIELD_HEADERS.items()},
+            })
     return rows
 
 
@@ -370,7 +382,7 @@ def export_workbook(bundles: list[dict[str, Any]], config: AppConfig, output_pat
             for row in sections[sheet_name]:
                 ws.append([row.get(header, "") for header in QUOTAS_HEADERS])
             ws.freeze_panes = "A2"
-            ws.auto_filter.ref = f"A1:D{max(ws.max_row, 1)}"
+            ws.auto_filter.ref = f"A1:{get_column_letter(len(QUOTAS_HEADERS))}{max(ws.max_row, 1)}"
             style_headers(ws, 1)
             style_data_cells(ws, 2)
             header_rows = 1

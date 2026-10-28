@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from openpyxl import load_workbook
-from ..exporters.layouts import FORBIDDEN_EXPORT_COLUMNS
+from ..exporters.layouts import FORBIDDEN_EXPORT_COLUMNS, QUOTAS_HEADERS
 
 EXPECTED_SHEETS = ["Derechos e impuestos", "Nomenclatura", "Restricciones", "Cuotas"]
 POSITIONAL_HEADER_PATTERN = re.compile(r"^[A-Z0-9]+_TABLA(_\d+)?$", re.IGNORECASE)
@@ -50,7 +50,7 @@ def validate_workbook_structure(path: str | Path) -> None:
         )
     if restrictions_headers[:4] != ["HS_Code", "Status", "Overall_Status", "Código"]:
         raise OutputValidationError("Unexpected Restricciones headers.")
-    if quotas_headers[:4] != ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"]:
+    if quotas_headers != QUOTAS_HEADERS:
         raise OutputValidationError("Unexpected Cuotas headers.")
     for sheet_name, headers in {
         "Derechos e impuestos": rights_headers + rights_row2,

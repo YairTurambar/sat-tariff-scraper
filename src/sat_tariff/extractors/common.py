@@ -88,6 +88,26 @@ def table_to_dicts(table: Tag) -> list[dict[str, str]]:
     return extracted
 
 
+def table_to_labeled_dicts(table: Tag, required_headers: tuple[str, ...]) -> list[dict[str, str]]:
+    """Read a leaf table by normalized headers, including a preceding title row."""
+    required = {ascii_upper(normalize_label(header)) for header in required_headers}
+    rows = direct_rows(table)
+    for index, row in enumerate(rows):
+        headers = [ascii_upper(normalize_label(cell_text(cell))) for cell in direct_cells(row)]
+        if not required.issubset(headers):
+            continue
+        extracted = []
+        for data_row in rows[index + 1:]:
+            cells = direct_cells(data_row)
+            if any(cell.find("table") for cell in cells):
+                continue
+            values = [cell_text(cell) for cell in cells]
+            if any(values):
+                extracted.append({header: values[i] if i < len(values) else "" for i, header in enumerate(headers)})
+        return extracted
+    return []
+
+
 def iter_standard_section_tables(
     soup: BeautifulSoup,
     *,
@@ -113,7 +133,7 @@ def iter_standard_section_tables(
 
 def find_anchor(soup: BeautifulSoup, label: str) -> Tag | None:
     target = normalize_label(label)
-    for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "label", "legend", "span", "div", "p", "td", "th"]):
+    for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "label", "legend", "span", "div", "p", "td", "th", "caption"]):
         if normalize_label(element.get_text(" ", strip=True)) == target:
             return element
     return None
@@ -151,6 +171,9 @@ def find_table_after_label(soup: BeautifulSoup, label: str, stop_labels: tuple[s
     anchor = find_anchor(soup, label)
     stop_set = {normalize_label(item) for item in stop_labels if item != label}
     if anchor is not None:
+        parent_table = anchor.find_parent("table")
+        if parent_table is not None and table_to_labeled_dicts(parent_table, ("Código", "Descripción")):
+            return parent_table
         for element in anchor.find_all_next():
             if not isinstance(element, Tag):
                 continue

@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from .common import ExtractionResult, iter_standard_section_tables, parse_html
+from .common import ExtractionResult, iter_standard_section_tables, normalize_text, parse_html
 from ..models import RestrictionRecord
+
+NO_RESTRICTIONS_MESSAGE = (
+    "No se han encontrado permisos no arancelarios u otras restricciones aplicables "
+    "al inciso consultado para los parámetros de búsqueda"
+)
 
 
 def parse_restrictions(html: str) -> ExtractionResult[RestrictionRecord]:
@@ -22,4 +27,9 @@ def parse_restrictions(html: str) -> ExtractionResult[RestrictionRecord]:
             )
     if rows:
         return ExtractionResult(rows=rows, status="ok")
+    if NO_RESTRICTIONS_MESSAGE in normalize_text(soup.get_text(" ", strip=True)):
+        return ExtractionResult(
+            rows=[RestrictionRecord(code="", description=NO_RESTRICTIONS_MESSAGE, additional_code="", value="", quota_code="")],
+            status="ok",
+        )
     return ExtractionResult(rows=[RestrictionRecord(code="", description="sin información", additional_code="", value="", quota_code="", source_status="sin_informacion")], status="sin_informacion")

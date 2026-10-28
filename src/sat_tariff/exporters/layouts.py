@@ -46,5 +46,14 @@ RESTRICTIONS_HEADERS = [
     "Valor",
     "Código de cuota",
 ]
-QUOTAS_HEADERS = ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL"]
+QUOTA_FIELD_HEADERS = {
+    "quota": "Cuota",
+    "country": "País",
+    "effective_from": "Inicio vigencia",
+    "effective_to": "Fin vigencia",
+    "initial_quantity": "Cantidad Inicial Permitida",
+    "exhaustion_date": "Fecha Agotamiento",
+    "variation": "% Variación",
+}
+QUOTAS_HEADERS = ["HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL", *QUOTA_FIELD_HEADERS.values()]
 TEXT_COLUMNS = {"HS_Code", "Código", "Código adicional", "Código de cuota"}

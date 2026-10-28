@@ -20,6 +20,76 @@ def read_fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+def test_restrictions_explicit_no_permits_is_success():
+    from sat_tariff.extractors.restrictions import NO_RESTRICTIONS_MESSAGE
+
+    result = parse_restrictions(read_fixture("restrictions_no_permits.html"))
+    assert result.status == "ok"
+    assert [row.to_dict() for row in result.rows] == [{
+        "code": "", "description": NO_RESTRICTIONS_MESSAGE,
+        "additional_code": "", "value": "", "quota_code": "", "source_status": "ok",
+    }]
+    assert parse_restrictions("<div>Unknown response</div>").status == "sin_informacion"
+
+
+def test_structured_quotas_preserve_header_mapping_and_empty_cells():
+    result = parse_quotas(read_fixture("quotas_structured.html"))
+    assert result.status == "ok"
+    assert len(result.rows) == 2
+    first, second = result.rows
+    assert first.general_treatment == "0210.11.0000 | - - Jamones, paletas y sus trozos, sin deshuesar"
+    assert (first.quota, first.country, first.effective_from, first.effective_to,
+            first.initial_quantity, first.exhaustion_date, first.variation) == (
+        "Cuota 1", "Guatemala", "01/01/2024", "31/12/2024", "100", "30/11/2024", "5%",
+    )
+    assert second.general_treatment == first.general_treatment
+    assert (second.quota, second.country, second.effective_from, second.effective_to,
+            second.initial_quantity, second.exhaustion_date, second.variation) == (
+        "Cuota 2", "", "01/01/2025", "", "200", "", "0%",
+    )
+
+
+def test_quotas_match_reordered_headers_and_ignore_layout_tables():
+    html = read_fixture("quotas_structured.html")
+    html = html.replace("<th>Cuota</th><th>País</th>", "<th>PAIS</th><th>CUOTA</th>")
+    html = html.replace("<td>Cuota 1</td><td>Guatemala</td>", "<td>Guatemala</td><td>Cuota 1</td>")
+    html = html.replace("<td>Cuota 2</td><td></td>", "<td></td><td>Cuota 2</td>")
+    result = parse_quotas(f"<table><tr><td>{html}</td></tr></table>")
+    assert len(result.rows) == 2
+    assert result.rows[0].quota == "Cuota 1"
+    assert result.rows[0].country == "Guatemala"
+    single = parse_quotas(html.replace(
+        '<tr><td></td><td>Cuota 2</td><td>01/01/2025</td><td></td><td>200</td><td></td><td>0%</td></tr>', ""
+    ))
+    assert len(single.rows) == 1
+
+
+def test_nomenclature_caption_headers_and_partial_scalars():
+    result = parse_nomenclature(read_fixture("nomenclature_caption.html"))
+    assert result.status == "ok"
+    assert [row.record_type for row in result.rows] == ["goods", "unit"]
+    assert result.rows[0].code == "0210.11.0000"
+    assert result.rows[1].unit_code == "KGM"
+    assert all(row.section == "Sección I" for row in result.rows)
+    partial = parse_nomenclature(read_fixture("nomenclature_partial.html"))
+    assert partial.status == "ok"
+    assert partial.rows[0].record_type == "summary"
+    assert partial.rows[0].source_status == "ok"
+    assert partial.rows[0].chapter == "Capítulo 02"
+
+
+@pytest.mark.parametrize("html", [
+    read_fixture("session_expired.html"),
+    "<h1>Error del servidor</h1>",
+    "<div>CAPTCHA requerido</div>",
+    "<html><table><tr><td>Unrecognized</td></tr></table></html>",
+    "",
+])
+def test_nomenclature_and_quotas_do_not_accept_invalid_responses(html):
+    assert parse_nomenclature(html).status not in {"ok", "empty"}
+    assert parse_quotas(html).status not in {"ok", "no_quotas"}
+
+
 def test_rights_taxes_preserves_titles_and_order():
     html = (
         "<table><tr><th>Foo</th><th>Bar</th></tr><tr><td>a</td><td>b</td></tr></table>"

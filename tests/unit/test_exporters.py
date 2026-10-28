@@ -1,7 +1,11 @@
 from pathlib import Path
+import os
+import subprocess
+import sys
 import uuid
 
 from openpyxl import load_workbook
+import pytest
 
 from sat_tariff.config import AppConfig
 from sat_tariff.exporters.layouts import FORBIDDEN_EXPORT_COLUMNS
@@ -9,6 +13,135 @@ from sat_tariff.exporters.excel import export_workbook
 from sat_tariff.exporters.styles import DATA_LINE_HEIGHT
 from sat_tariff.storage import Storage
 
+
+def test_corrected_sections_round_trip_sqlite_to_excel(tmp_path):
+    from sat_tariff.extractors.nomenclature import parse_nomenclature
+    from sat_tariff.extractors.quotas import parse_quotas
+    from sat_tariff.extractors.restrictions import NO_RESTRICTIONS_MESSAGE, parse_restrictions
+    from sat_tariff.models import ProcessingState
+    from sat_tariff.validation.output_validator import OutputValidationError, validate_workbook_structure
+
+    fixtures = Path(__file__).resolve().parents[1] / "fixtures"
+    storage = Storage(tmp_path / "source.sqlite3")
+    try:
+        storage.upsert_code("0210110000", "0210110000", ProcessingState.completed)
+        for section, parser, fixture in (
+            ("nomenclature", parse_nomenclature, "nomenclature_caption.html"),
+            ("restrictions", parse_restrictions, "restrictions_no_permits.html"),
+            ("quotas", parse_quotas, "quotas_structured.html"),
+        ):
+            result = parser((fixtures / fixture).read_text(encoding="utf-8"))
+            storage.save_section_rows("0210110000", section, result.rows, section_status=result.status)
+        # A historical JSON record must not require a schema migration.
+        storage.upsert_code("0101210000", "0101210000", ProcessingState.completed)
+        storage.save_section_rows("0101210000", "quotas", [{
+            "treatment_name": "TRATAMIENTO GENERAL", "message": "Cupo anual | 100 toneladas", "source_status": "ok",
+        }], section_status="ok")
+        bundles = storage.load_all_for_export()
+    finally:
+        storage.close()
+    path = export_workbook(bundles, AppConfig(output_xlsx=tmp_path / "export.xlsx", backup_output=False))
+    workbook = load_workbook(path)
+    quotas = workbook["Cuotas"]
+    assert [cell.value for cell in quotas[1]] == [
+        "HS_Code", "Status", "Overall_Status", "TRATAMIENTO GENERAL", "Cuota", "País",
+        "Inicio vigencia", "Fin vigencia", "Cantidad Inicial Permitida", "Fecha Agotamiento", "% Variación",
+    ]
+    assert quotas.max_row == 4
+    assert quotas["D2"].value == "Cupo anual | 100 toneladas"
+    assert all(quotas.cell(2, column).value is None for column in range(5, 12))
+    assert [cell.value for cell in quotas[3]][4:] == [
+        "Cuota 1", "Guatemala", "01/01/2024", "31/12/2024", "100", "30/11/2024", "5%",
+    ]
+    assert [cell.value for cell in quotas[4]][4:] == ["Cuota 2", None, "01/01/2025", None, "200", None, "0%"]
+    assert quotas["D3"].value == quotas["D4"].value
+    assert quotas.auto_filter.ref == "A1:K4"
+    restrictions = workbook["Restricciones"]
+    assert [cell.value for cell in restrictions[1]] == [
+        "HS_Code", "Status", "Overall_Status", "Código", "Descripción", "Código adicional", "Valor", "Código de cuota",
+    ]
+    assert [cell.value for cell in restrictions[3]] == [
+        "0210110000", "ok", "completed", None, NO_RESTRICTIONS_MESSAGE, None, None, None,
+    ]
+    nomenclature = workbook["Nomenclatura"]
+    assert [nomenclature.cell(2, i).value or nomenclature.cell(1, i).value for i in range(1, 11)] == [
+        "HS_Code", "Status", "Overall_Status", "Sección", "Capítulo:", "Fecha inicio de vigencia:",
+        "Fecha fin de vigencia:", "Códigos adicionales", "Código", "Descripción",
+    ]
+    assert nomenclature["I4"].value == "0210.11.0000"
+    assert nomenclature["J4"].value == "- - Jamones, paletas y sus trozos, sin deshuesar"
+    assert nomenclature["I5"].value == "KGM"
+    assert nomenclature["J5"].value == "Kilogramo"
+    assert nomenclature["D4"].value == nomenclature["D5"].value == "Sección I"
+    for name in ("Derechos e impuestos", "Restricciones", "Nomenclatura"):
+        sheet = workbook[name]
+        assert sheet["A1"].fill.fgColor.rgb[-6:] == "4472C4"
+        assert sheet["A1"].font.bold
+        assert sheet["A1"].font.color.rgb[-6:] == "FFFFFF"
+        assert sheet.freeze_panes == ("A3" if name == "Nomenclatura" else "A2")
+        assert sheet.cell(3 if name == "Nomenclatura" else 2, 1).number_format == "@"
+    assert restrictions.auto_filter.ref == "A1:H3"
+    assert nomenclature.auto_filter.ref == "A2:J5"
+    validate_workbook_structure(path)
+    quotas.delete_cols(11)
+    workbook.save(tmp_path / "invalid.xlsx")
+    workbook.close()
+    with pytest.raises(OutputValidationError, match="Cuotas"):
+        validate_workbook_structure(tmp_path / "invalid.xlsx")
+
+
+def test_nomenclature_historical_summary_and_other_details_are_not_lost():
+    from sat_tariff.exporters.excel import _build_nomenclature_rows
+
+    rows = _build_nomenclature_rows([{
+        "raw_code": "0210110000", "state": "completed",
+        "nomenclature": {"status": "empty", "rows": [
+            {"record_type": "summary", "section": "Sección I", "chapter": "Capítulo 02"},
+            {"record_type": "goods", "code": "0210.11.0000", "description": "Jamones"},
+            {"record_type": "unit", "unit_code": "KGM", "unit_description": "Kilogramo"},
+            {"record_type": "unit", "unit_code": "KGM", "unit_description": "Kilogramo"},
+            {"record_type": "Clasificadores estadísticos", "content": "No aplica"},
+        ]},
+    }])
+    assert [(row["Código"], row["Descripción"]) for row in rows] == [
+        ("0210.11.0000", "Jamones"), ("KGM", "Kilogramo"), ("", "No aplica"),
+    ]
+    assert all(row["Status"] == "ok" and row["Sección"] == "Sección I" for row in rows)
+    partial = _build_nomenclature_rows([{
+        "raw_code": "0210110000", "state": "completed",
+        "nomenclature": {"status": "empty", "rows": [{"record_type": "summary", "section": "Sección I"}]},
+    }])
+    assert len(partial) == 1
+    assert partial[0]["Status"] == "ok"
+    assert partial[0]["Sección"] == "Sección I"
+
+
+def test_quotas_do_not_overwrite_shared_treatment_with_null():
+    from sat_tariff.exporters.excel import _build_quotas_rows
+
+    rows = _build_quotas_rows([{
+        "raw_code": "0210110000", "state": "completed", "quotas": {"status": "ok", "rows": [
+            {"general_treatment": "0210.11.0000 | Jamones", "quota": "1"},
+            {"general_treatment": None, "quota": "2"},
+            {"general_treatment": "", "quota": "3"},
+        ]},
+    }])
+    assert len(rows) == 3
+    assert all(row["TRATAMIENTO GENERAL"] == "0210.11.0000 | Jamones" for row in rows)
+
+
+@pytest.mark.parametrize("first_import", [
+    "import sat_tariff.validation.output_validator",
+    "import sat_tariff.extractors.quotas",
+])
+def test_direct_validator_and_package_export_imports_in_clean_process(first_import):
+    root = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": str(root / "src")}
+    subprocess.run([
+        sys.executable, "-c",
+        first_import + "; from sat_tariff.exporters import export_workbook; "
+        "import sys; assert callable(export_workbook); assert 'playwright.sync_api' not in sys.modules",
+    ], check=True, env=env, cwd=root)
 
 
 def make_paths():

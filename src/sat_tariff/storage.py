@@ -18,6 +18,7 @@ SECTION_TABLES = {
     "restrictions": "restriction_rows",
     "quotas": "quota_rows",
 }
+FAILED_SECTION_STATUSES = {"absent", "sin_informacion", "empty", "session_expired", "load_error", "extraction_error"}
 
 
 class Storage:
@@ -275,11 +276,11 @@ class Storage:
     def get_processed_sections(self, code: str) -> set[str]:
         processed: set[str] = set()
         for section, table_name in SECTION_TABLES.items():
-            row = self.connection.execute(
-                f"SELECT 1 FROM {table_name} WHERE code = ? LIMIT 1",
+            rows = self.connection.execute(
+                f"SELECT section_status FROM {table_name} WHERE code = ?",
                 (code,),
-            ).fetchone()
-            if row is not None:
+            ).fetchall()
+            if rows and not any(row["section_status"] in FAILED_SECTION_STATUSES for row in rows):
                 processed.add(section)
         return processed
 
