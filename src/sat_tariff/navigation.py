@@ -30,7 +30,7 @@ from .selectors import (
     find_form_context,
     section_submit_selectors,
 )
-from .storage import Storage
+from .storage import FAILED_SECTION_STATUSES, Storage
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .batches import BatchPlan
@@ -281,7 +281,7 @@ class NavigationService:
         cleaned = re.sub(r"(?i)(cookie|set-cookie|session(?:id)?|token)\s*[:=]\s*[^;\s]+", r"\1=[REDACTED]", cleaned)
         return cleaned
 
-    def capture_evidence(self, code: str, section: str, error: Exception) -> None:
+    def capture_evidence(self, code: str, section: str, error: Exception, *, section_html: str | None = None) -> None:
         artifacts_dir = Path(self.config.artifacts_dir)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         stamp = f"{code}-{section}-{int(time.time())}"
@@ -291,7 +291,7 @@ class NavigationService:
         except Exception:
             logger.debug("Screenshot capture failed for %s/%s", code, section)
         try:
-            html = self._sanitize_html(page.content())
+            html = self._sanitize_html(section_html if section_html is not None else page.content())
         except Exception:  # pragma: no cover - defensive
             html = ""
         (artifacts_dir / f"{stamp}.html").write_text(html, encoding="utf-8")
@@ -375,10 +375,11 @@ class NavigationService:
         return html
 
     # -- orchestration ---------------------------------------------------
-    def _handle_failure(self, code: str, section: str, exc: Exception) -> None:
+    def _handle_failure(self, code: str, section: str, exc: Exception, *, section_html: str | None = None) -> None:
         """Persist evidence and a resumable state for a failed step."""
 
-        self.capture_evidence(code, section, exc)
+        logger.error("HS %s stage %s: %s", code, section, exc)
+        self.capture_evidence(code, section, exc, section_html=section_html)
         if isinstance(exc, (CaptchaRequiredError, CaptchaTimeoutError)):
             # CAPTCHA pauses are never permanent and never discard checkpoints.
             self.storage.update_state(code, ProcessingState.captcha_required, str(exc))
@@ -416,11 +417,26 @@ class NavigationService:
             if not started and section != (resume_point.next_section or "rights"):
                 continue
             started = True
+            if not force_restart and section in processed_sections:
+                continue
             label = self._section_label(section)
+            html = None
             try:
                 self.ensure_captcha_cleared(entry.normalized_code)
                 html = self.open_section_html(section)
                 result = SECTION_PARSERS[section](html)
+                status = getattr(result, "status", "")
+                if status in FAILED_SECTION_STATUSES:
+                    raise SectionNavigationError(
+                        f"{section}: {status}; {getattr(result, 'message', '') or 'unrecognized or incomplete SAT response'}"
+                    )
+                if section == "nomenclature":
+                    goods_codes = [
+                        _digits(record.code) for record in result.rows
+                        if getattr(record, "record_type", "") == "goods" and getattr(record, "code", "")
+                    ]
+                    if any(not _digits(entry.normalized_code).startswith(code) for code in goods_codes):
+                        raise SectionNavigationError(f"nomenclature: goods code does not match HS {entry.normalized_code}")
                 self.storage.save_section_rows(entry.normalized_code, section, result.rows, section_status=result.status)
                 self.storage.update_state(entry.normalized_code, SECTION_PROGRESS[section])
                 status = getattr(result, "status", "")
@@ -432,7 +448,7 @@ class NavigationService:
                     outcome = "completado"
                 self.announce(f"  {label}: {outcome}")
             except Exception as exc:
-                self._handle_failure(entry.normalized_code, section, exc)
+                self._handle_failure(entry.normalized_code, section, exc, section_html=html)
                 raise
         self.storage.update_state(entry.normalized_code, ProcessingState.completed)
         self.announce("Checkpoint guardado.")

@@ -80,6 +80,15 @@ class QuotaRecord:
     treatment_name: str
     message: str
     source_status: str
+    general_treatment: str = ""
+    quota: str = ""
+    country: str = ""
+    effective_from: str = ""
+    effective_to: str = ""
+    initial_quantity: str = ""
+    exhaustion_date: str = ""
+    variation: str = ""
+    extensions: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

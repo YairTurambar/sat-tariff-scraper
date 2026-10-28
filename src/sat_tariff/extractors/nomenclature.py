@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .common import ExtractionResult, extract_labeled_value, extract_text_after_label, find_table_after_label, parse_date_attempt, parse_html, table_to_dicts
+from .common import ExtractionResult, ascii_upper, extract_labeled_value, extract_text_after_label, find_table_after_label, parse_date_attempt, parse_html, table_to_dicts, table_to_labeled_dicts
 from ..models import NomenclatureRecord
 
 BLOCK_LABELS = (
@@ -40,6 +40,11 @@ def _base_record(
 
 def parse_nomenclature(html: str) -> ExtractionResult[NomenclatureRecord]:
     soup = parse_html(html)
+    page_text = ascii_upper(soup.get_text(" ", strip=True))
+    if ("SESION" in page_text and ("EXPIR" in page_text or "CADUC" in page_text)) or "CAPTCHA" in page_text:
+        return ExtractionResult(rows=[], status="extraction_error", message="Session expired or manual CAPTCHA required")
+    if soup.find(["h1", "title"], string=lambda text: bool(text and "ERROR" in ascii_upper(text))):
+        return ExtractionResult(rows=[], status="extraction_error", message="SAT error page")
     section = extract_labeled_value(soup, "Sección")
     chapter = extract_labeled_value(soup, "Capítulo:")
     from_raw = extract_labeled_value(soup, "Fecha inicio de vigencia:")
@@ -56,25 +61,25 @@ def parse_nomenclature(html: str) -> ExtractionResult[NomenclatureRecord]:
     rows: list[NomenclatureRecord] = []
     goods_table = find_table_after_label(soup, "Código de Mercancías", BLOCK_LABELS)
     if goods_table is not None:
-        for row in table_to_dicts(goods_table):
+        for row in table_to_labeled_dicts(goods_table, ("Código", "Descripción")):
             rows.append(
                 NomenclatureRecord(
                     **_base_record("goods", section, chapter, from_raw, to_raw, additional_text, source_status="ok"),
                     unit_code="",
                     unit_description="",
-                    code=row.get("Código", ""),
-                    description=row.get("Descripción", ""),
+                    code=row.get("CODIGO", ""),
+                    description=row.get("DESCRIPCION", ""),
                 )
             )
 
     units_table = find_table_after_label(soup, "Unidades de medida", BLOCK_LABELS)
     if units_table is not None:
-        for row in table_to_dicts(units_table):
+        for row in table_to_labeled_dicts(units_table, ("Código", "Descripción")):
             rows.append(
                 NomenclatureRecord(
                     **_base_record("unit", section, chapter, from_raw, to_raw, additional_text, source_status="ok"),
-                    unit_code=row.get("Código", ""),
-                    unit_description=row.get("Descripción", ""),
+                    unit_code=row.get("CODIGO", ""),
+                    unit_description=row.get("DESCRIPCION", ""),
                 )
             )
 
@@ -99,10 +104,10 @@ def parse_nomenclature(html: str) -> ExtractionResult[NomenclatureRecord]:
     if any([section, chapter, from_raw, to_raw, additional_text]):
         rows.append(
             NomenclatureRecord(
-                **_base_record("summary", section, chapter, from_raw, to_raw, additional_text, source_status="empty"),
+                **_base_record("summary", section, chapter, from_raw, to_raw, additional_text, source_status="ok"),
                 unit_code="",
                 unit_description="",
             )
         )
-        return ExtractionResult(rows=rows, status="empty")
+        return ExtractionResult(rows=rows, status="ok")
     return ExtractionResult(rows=[], status="absent", message="Nomenclature section not found")
